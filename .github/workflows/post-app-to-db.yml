@@ -1,39 +1,47 @@
 name: Add App to API
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       app_name:
         description: 'Application name'
         required: true
         default: 'ArgoCD'
+        type: string
       app_url:
         description: 'Application URL'
         required: true
         default: 'https://argo-cd.lolmeida.com'
+        type: string
       app_description:
         description: 'Application description'
         required: true
         default: 'Declarative GitOps CD for Kubernetes.'
+        type: string
       app_icon:
         description: 'Icon URL'
         required: false
         default: 'https://placehold.co/600x400/white/gray?text=DOMO'
+        type: string
       is_active:
         description: 'Is the application active?'
         required: false
-        default: 'true'
+        default: true
+        type: boolean
       is_enabled:
         description: 'Is the application enabled?'
         required: false
-        default: 'true'
+        default: true
+        type: boolean
       api_username:
         description: 'API Username'
         required: true
         default: 'test'
+        type: string
       api_password:
         description: 'API Password'
         required: true
         default: 'test1234'
+        type: string
 
 jobs:
   add-app:
