@@ -1,0 +1,165 @@
+name: Spotless Check (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      java_version:
+        description: 'Java version'
+        required: false
+        type: string
+        default: '21'
+      java_distribution:
+        description: 'Java distribution'
+        required: false
+        type: string
+        default: 'temurin'
+      working_directory:
+        description: 'Working directory'
+        required: false
+        type: string
+        default: '.'
+      maven_profiles:
+        description: 'Maven profiles to activate'
+        required: false
+        type: string
+        default: ''
+      spotless_goal:
+        description: 'Spotless goal to run'
+        required: false
+        type: string
+        default: 'check'
+      fail_on_error:
+        description: 'Fail the job on spotless errors'
+        required: false
+        type: boolean
+        default: true
+      auto_fix:
+        description: 'Automatically fix formatting issues and commit'
+        required: false
+        type: boolean
+        default: false
+      fetch_depth:
+        description: 'Git fetch depth (0 for full history)'
+        required: false
+        type: number
+        default: 0
+    outputs:
+      spotless_status:
+        description: 'Spotless check status'
+        value: ${{ jobs.spotless.outputs.status }}
+
+jobs:
+  spotless:
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.spotless-check.outputs.status }}
+    
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.fetch_depth }}
+          token: ${{ github.token }}
+
+      - name: Set up JDK ${{ inputs.java_version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ inputs.java_distribution }}
+          java-version: ${{ inputs.java_version }}
+          cache: 'maven'
+
+      - name: Prepare Maven command
+        id: maven-cmd
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          CMD="./mvnw -B -ntp"
+          
+          # Add profiles if specified
+          if [[ -n "${{ inputs.maven_profiles }}" ]]; then
+            CMD="$CMD -P${{ inputs.maven_profiles }}"
+          fi
+          
+          # Add spotless goal
+          if [[ "${{ inputs.auto_fix }}" == "true" ]]; then
+            CMD="$CMD spotless:apply"
+          else
+            CMD="$CMD spotless:${{ inputs.spotless_goal }}"
+          fi
+          
+          echo "MAVEN_CMD=$CMD" >> $GITHUB_OUTPUT
+          echo "Maven command: $CMD"
+
+      - name: Run Spotless check
+        id: spotless-check
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          set +e  # Don't exit on error immediately
+          ${{ steps.maven-cmd.outputs.MAVEN_CMD }}
+          SPOTLESS_EXIT_CODE=$?
+          
+          if [[ $SPOTLESS_EXIT_CODE -eq 0 ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "✅ Spotless check passed"
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "❌ Spotless check failed"
+            
+            if [[ "${{ inputs.fail_on_error }}" == "true" ]]; then
+              exit $SPOTLESS_EXIT_CODE
+            fi
+          fi
+
+      - name: Check for formatting changes
+        if: ${{ inputs.auto_fix }}
+        id: git-changes
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "changes=true" >> $GITHUB_OUTPUT
+            echo "Found formatting changes"
+          else
+            echo "changes=false" >> $GITHUB_OUTPUT
+            echo "No formatting changes"
+          fi
+
+      - name: Commit formatting changes
+        if: ${{ inputs.auto_fix && steps.git-changes.outputs.changes == 'true' }}
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          git add .
+          git commit -m "🎨 Apply Spotless formatting [skip ci]"
+          git push
+
+      - name: Comment on PR (if formatting issues)
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🎨 Spotless Format Check Failed
+              
+              Your code formatting doesn't match the project's style guidelines.
+              
+              **To fix this locally:**
+              \`\`\`bash
+              ./mvnw spotless:apply
+              \`\`\`
+              
+              **Or enable auto-fix by adding this to your workflow:**
+              \`\`\`yaml
+              with:
+                auto_fix: true
+              \`\`\`
+              
+              Please fix the formatting and push your changes.`
+            })

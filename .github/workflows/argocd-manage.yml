@@ -1,0 +1,338 @@
+name: ArgoCD Manage (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: 'Perform a dry-run only (validate but do not apply)'
+        required: false
+        type: boolean
+        default: false
+      action:
+        description: 'Action to perform'
+        required: true
+        type: string
+        # Options: remove-all, remove-dev, remove-staging, remove-prod, sync-all, sync-dev, sync-staging, sync-prod
+      environment:
+        description: 'Target environment (dev, staging, prod, all)'
+        required: false
+        type: string
+        default: 'dev'
+      argocd_namespace:
+        description: 'ArgoCD namespace'
+        required: false
+        type: string
+        default: 'argocd'
+      app_label_selector:
+        description: 'Label selector for apps'
+        required: false
+        type: string
+        default: 'app=apps'
+      helm_version:
+        description: 'Helm version to use'
+        required: false
+        type: string
+        default: '3.12.0'
+      kubectl_version:
+        description: 'kubectl version to use'
+        required: false
+        type: string
+        default: 'latest'
+      wait_timeout:
+        description: 'Wait timeout for operations'
+        required: false
+        type: string
+        default: '300s'
+      force_delete:
+        description: 'Force delete stuck resources'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      KUBE_CONFIG:
+        required: true
+    outputs:
+      action_status:
+        description: 'Action execution status'
+        value: ${{ jobs.manage.outputs.status }}
+      affected_resources:
+        description: 'Number of affected resources'
+        value: ${{ jobs.manage.outputs.affected_count }}
+
+jobs:
+  manage:
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.action-result.outputs.status }}
+      affected_count: ${{ steps.action-result.outputs.affected_count }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ inputs.kubectl_version }}
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ inputs.helm_version }}
+
+      - name: Validate inputs
+        run: |
+          VALID_ACTIONS="remove-all remove-dev remove-staging remove-prod sync-all sync-dev sync-staging sync-prod"
+          if [[ ! " $VALID_ACTIONS " =~ " ${{ inputs.action }} " ]]; then
+            echo "❌ Invalid action: ${{ inputs.action }}"
+            echo "Valid actions: $VALID_ACTIONS"
+            exit 1
+          fi
+          echo "✅ Action validated: ${{ inputs.action }}"
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: Verify cluster connection
+        run: |
+          echo "🔍 Verifying cluster connection..."
+          kubectl version --short
+          kubectl config current-context
+          
+          # Check if ArgoCD namespace exists
+          if ! kubectl get namespace ${{ inputs.argocd_namespace }} >/dev/null 2>&1; then
+            echo "❌ ArgoCD namespace '${{ inputs.argocd_namespace }}' not found"
+            exit 1
+          fi
+          echo "✅ Cluster connection verified"
+
+      - name: Map action to environment
+        id: env-mapping
+        run: |
+          case "${{ inputs.action }}" in
+            *-dev)
+              echo "env_label=development" >> $GITHUB_OUTPUT
+              ;;
+            *-staging)
+              echo "env_label=staging" >> $GITHUB_OUTPUT
+              ;;
+            *-prod)
+              echo "env_label=production" >> $GITHUB_OUTPUT
+              ;;
+            *-all)
+              echo "env_label=" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              # Use the environment input if provided
+              case "${{ inputs.environment }}" in
+                dev|development)
+                  echo "env_label=development" >> $GITHUB_OUTPUT
+                  ;;
+                staging)
+                  echo "env_label=staging" >> $GITHUB_OUTPUT
+                  ;;
+                prod|production)
+                  echo "env_label=production" >> $GITHUB_OUTPUT
+                  ;;
+                all|"")
+                  echo "env_label=" >> $GITHUB_OUTPUT
+                  ;;
+                *)
+                  echo "env_label=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+                  ;;
+              esac
+              ;;
+          esac
+
+      - name: Remove ArgoCD resources
+        if: ${{ startsWith(inputs.action, 'remove-') }}
+        id: remove-resources
+        run: |
+          # Function to safely remove ArgoCD resources
+          remove_argocd_resources() {
+            local env_label="$1"
+            local label_selector="${{ inputs.app_label_selector }}"
+            
+            # Add environment label if specified
+            if [[ -n "$env_label" ]]; then
+              label_selector="${label_selector},environment=${env_label}"
+              echo "🏷️  Using label selector: $label_selector"
+            else
+              echo "🏷️  Using label selector: $label_selector (all environments)"
+            fi
+
+            # Count resources before deletion
+            local resource_count
+            resource_count=$(kubectl get applicationsets.argoproj.io,applications.argoproj.io \
+              -n "${{ inputs.argocd_namespace }}" -l "$label_selector" -o name 2>/dev/null | wc -l)
+            
+            echo "resource_count=$resource_count" >> $GITHUB_OUTPUT
+            
+            if [[ "$resource_count" -eq 0 ]]; then
+              echo "ℹ️  No resources found matching selector: $label_selector"
+              return 0
+            fi
+
+            # Set up dry-run
+            if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+              echo "🔍 [DRY-RUN] Would remove $resource_count ArgoCD resources with labels: $label_selector"
+              echo "Resources that would be removed:"
+              kubectl get applicationsets.argoproj.io,applications.argoproj.io \
+                -n "${{ inputs.argocd_namespace }}" -l "$label_selector" \
+                -o custom-columns=KIND:.kind,NAME:.metadata.name,ENVIRONMENT:.metadata.labels.environment 2>/dev/null
+              return 0
+            fi
+
+            # Show resources to be deleted
+            echo "🗑️  Resources to be deleted ($resource_count total):"
+            kubectl get applicationsets.argoproj.io,applications.argoproj.io \
+              -n "${{ inputs.argocd_namespace }}" -l "$label_selector" \
+              -o custom-columns=KIND:.kind,NAME:.metadata.name,ENVIRONMENT:.metadata.labels.environment
+            
+            # Delete ApplicationSets first
+            echo "Deleting ApplicationSets..."
+            kubectl delete applicationsets.argoproj.io \
+              -n "${{ inputs.argocd_namespace }}" -l "$label_selector" \
+              --ignore-not-found=true --timeout=${{ inputs.wait_timeout }}
+
+            # Wait a bit for cascading deletions
+            echo "Waiting for ApplicationSet deletions to propagate..."
+            sleep 10
+
+            # Delete Applications
+            echo "Deleting Applications..."
+            kubectl delete applications.argoproj.io \
+              -n "${{ inputs.argocd_namespace }}" -l "$label_selector" \
+              --ignore-not-found=true --timeout=${{ inputs.wait_timeout }}
+
+            # Handle remaining applications with finalizers if force_delete is enabled
+            if [[ "${{ inputs.force_delete }}" == "true" ]]; then
+              echo "Checking for remaining Applications with finalizers..."
+              local remaining
+              remaining=$(kubectl get applications.argoproj.io \
+                -n "${{ inputs.argocd_namespace }}" -l "$label_selector" -o name 2>/dev/null)
+              
+              if [[ -n "$remaining" ]]; then
+                echo "Found remaining Applications with finalizers:"
+                echo "$remaining"
+                echo "Removing finalizers..."
+                while IFS= read -r app; do
+                  if [[ -n "$app" ]]; then
+                    echo "Removing finalizers from $app"
+                    kubectl patch "$app" -n "${{ inputs.argocd_namespace }}" \
+                      -p '{"metadata":{"finalizers":[]}}' --type=merge || true
+                  fi
+                done <<< "$remaining"
+
+                # Delete applications again after finalizer removal
+                echo "Deleting remaining Applications..."
+                kubectl delete applications.argoproj.io \
+                  -n "${{ inputs.argocd_namespace }}" -l "$label_selector" \
+                  --ignore-not-found=true --force --grace-period=0 || true
+              fi
+            fi
+
+            # Verify deletion
+            local remaining_count
+            remaining_count=$(kubectl get applicationsets.argoproj.io,applications.argoproj.io \
+              -n "${{ inputs.argocd_namespace }}" -l "$label_selector" -o name 2>/dev/null | wc -l)
+            
+            if [[ "$remaining_count" -gt 0 ]]; then
+              echo "⚠️  Warning: $remaining_count resources remain after cleanup"
+              kubectl get applicationsets.argoproj.io,applications.argoproj.io \
+                -n "${{ inputs.argocd_namespace }}" -l "$label_selector" \
+                -o custom-columns=KIND:.kind,NAME:.metadata.name,ENVIRONMENT:.metadata.labels.environment
+            else
+              echo "✅ All resources successfully removed"
+            fi
+          }
+
+          # Execute removal based on environment
+          remove_argocd_resources "${{ steps.env-mapping.outputs.env_label }}"
+
+      - name: Sync ArgoCD applications
+        if: ${{ startsWith(inputs.action, 'sync-') }}
+        id: sync-resources
+        run: |
+          sync_argocd_applications() {
+            local env_label="$1"
+            local label_selector="${{ inputs.app_label_selector }}"
+            
+            # Add environment label if specified
+            if [[ -n "$env_label" ]]; then
+              label_selector="${label_selector},environment=${env_label}"
+              echo "🔄 Syncing ArgoCD Applications for environment: $env_label"
+            else
+              echo "🔄 Syncing ALL ArgoCD Applications"
+            fi
+
+            # Get applications to sync
+            local apps
+            apps=$(kubectl get applications.argoproj.io \
+              -n ${{ inputs.argocd_namespace }} -l "$label_selector" \
+              -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+
+            if [[ -z "$apps" ]]; then
+              echo "ℹ️  No applications found matching selector: $label_selector"
+              echo "resource_count=0" >> $GITHUB_OUTPUT
+              return 0
+            fi
+
+            local app_array=($apps)
+            local app_count=${#app_array[@]}
+            echo "resource_count=$app_count" >> $GITHUB_OUTPUT
+
+            if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+              echo "🔍 [DRY-RUN] Would sync $app_count applications:"
+              for app in $apps; do
+                echo "  - $app"
+              done
+              return 0
+            fi
+
+            echo "🚀 Syncing $app_count applications..."
+            local failed_apps=()
+            
+            for app in $apps; do
+              echo "Syncing $app..."
+              if kubectl patch application.argoproj.io "$app" \
+                -n ${{ inputs.argocd_namespace }} \
+                -p '{"operation":{"initiatedBy":{"username":"github-action"},"sync":{"revision":"HEAD"}}}' \
+                --type=merge; then
+                echo "✅ Successfully triggered sync for $app"
+              else
+                echo "❌ Failed to sync $app"
+                failed_apps+=("$app")
+              fi
+            done
+
+            if [[ ${#failed_apps[@]} -gt 0 ]]; then
+              echo "❌ Failed to sync ${#failed_apps[@]} applications:"
+              printf '%s\n' "${failed_apps[@]}"
+              return 1
+            else
+              echo "✅ All applications synced successfully"
+            fi
+          }
+
+          # Execute sync based on environment
+          sync_argocd_applications "${{ steps.env-mapping.outputs.env_label }}"
+
+      - name: Set action result
+        id: action-result
+        run: |
+          if [[ "${{ startsWith(inputs.action, 'remove-') }}" == "true" ]]; then
+            AFFECTED_COUNT="${{ steps.remove-resources.outputs.resource_count || '0' }}"
+          elif [[ "${{ startsWith(inputs.action, 'sync-') }}" == "true" ]]; then
+            AFFECTED_COUNT="${{ steps.sync-resources.outputs.resource_count || '0' }}"
+          else
+            AFFECTED_COUNT="0"
+          fi
+          
+          echo "affected_count=$AFFECTED_COUNT" >> $GITHUB_OUTPUT
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "✅ Action '${{ inputs.action }}' completed successfully"
+          echo "📊 Affected resources: $AFFECTED_COUNT"

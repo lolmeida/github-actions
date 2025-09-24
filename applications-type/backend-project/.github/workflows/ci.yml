@@ -1,0 +1,29 @@
+name: Backend Java CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  code-quality:
+    uses: lolmeida/reusable-github-actions/.github/workflows/spotless-check.yml@main
+    with:
+      java_version: '21'
+      java_distribution: 'temurin'
+      auto_fix: ${{ github.event_name == 'pull_request' }}
+      fail_on_error: true
+
+  build-and-push:
+    needs: code-quality
+    if: github.event_name == 'push'
+    uses: lolmeida/reusable-github-actions/.github/workflows/docker-jib-push.yml@main
+    with:
+      java_version: '21'
+      image_name: my-backend-service
+      maven_profiles: ${{ github.ref_name == 'main' && 'prod' || 'staging' }}
+      skip_tests: false
+    secrets:
+      DOCKER_HUB_USER: ${{ secrets.DOCKER_HUB_USER }}
+      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}

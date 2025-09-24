@@ -1,0 +1,237 @@
+name: Helm CI (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref (branch or SHA) to checkout"
+        required: false
+        type: string
+        default: ""
+      run_argocd_apps:
+        description: "Render argocd-apps (meta-chart)"
+        required: false
+        type: string
+        default: "true"
+      run_helm:
+        description: "Render helm chart with overlays"
+        required: false
+        type: string
+        default: "true"
+      envs:
+        description: "Comma-separated envs to render (for helm)"
+        required: false
+        type: string
+        default: "staging,production"
+      helm_version:
+        description: "Helm version to use"
+        required: false
+        type: string
+        default: "3.12.0"
+      argocd_chart_path:
+        description: "Path to ArgoCD apps chart"
+        required: false
+        type: string
+        default: "./argocd-apps"
+      helm_chart_path:
+        description: "Path to Helm chart"
+        required: false
+        type: string
+        default: "./helm"
+      overlays_path:
+        description: "Path to overlays directory"
+        required: false
+        type: string
+        default: "./overlays"
+      argocd_values_file:
+        description: "ArgoCD values file"
+        required: false
+        type: string
+        default: "argocd-apps/values.yaml"
+      strict_lint:
+        description: "Use strict linting"
+        required: false
+        type: boolean
+        default: true
+      debug_mode:
+        description: "Enable debug output"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      lint_status:
+        description: "Helm lint status"
+        value: ${{ jobs.lint-and-render.outputs.lint_status }}
+
+jobs:
+  lint-and-render:
+    runs-on: ubuntu-latest
+    outputs:
+      lint_status: ${{ steps.lint-results.outputs.status }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ inputs.helm_version }}
+
+      - name: Verify chart paths
+        run: |
+          echo "Checking chart paths..."
+          if [[ "${{ inputs.run_argocd_apps }}" == "true" ]]; then
+            if [[ ! -d "${{ inputs.argocd_chart_path }}" ]]; then
+              echo "❌ ArgoCD apps chart path not found: ${{ inputs.argocd_chart_path }}"
+              exit 1
+            fi
+            echo "✅ ArgoCD apps chart found: ${{ inputs.argocd_chart_path }}"
+          fi
+          
+          if [[ "${{ inputs.run_helm }}" == "true" ]]; then
+            if [[ ! -d "${{ inputs.helm_chart_path }}" ]]; then
+              echo "❌ Helm chart path not found: ${{ inputs.helm_chart_path }}"
+              exit 1
+            fi
+            echo "✅ Helm chart found: ${{ inputs.helm_chart_path }}"
+          fi
+
+      - name: Helm lint (charts)
+        id: helm-lint
+        run: |
+          set +e
+          LINT_FAILED=false
+          
+          if [[ "${{ inputs.run_argocd_apps }}" == "true" ]]; then
+            echo "🔍 Linting argocd-apps chart..."
+            LINT_FLAGS=""
+            if [[ "${{ inputs.strict_lint }}" == "true" ]]; then
+              LINT_FLAGS="--strict"
+            fi
+            
+            helm lint ${{ inputs.argocd_chart_path }} $LINT_FLAGS
+            if [[ $? -ne 0 ]]; then
+              echo "❌ ArgoCD apps chart lint failed"
+              LINT_FAILED=true
+            else
+              echo "✅ ArgoCD apps chart lint passed"
+            fi
+          fi
+          
+          if [[ "${{ inputs.run_helm }}" == "true" ]]; then
+            echo "🔍 Linting helm chart..."
+            LINT_FLAGS=""
+            if [[ "${{ inputs.strict_lint }}" == "true" ]]; then
+              LINT_FLAGS="--strict"
+            fi
+            
+            helm lint ${{ inputs.helm_chart_path }} $LINT_FLAGS
+            if [[ $? -ne 0 ]]; then
+              echo "❌ Helm chart lint failed"
+              LINT_FAILED=true
+            else
+              echo "✅ Helm chart lint passed"
+            fi
+          fi
+          
+          if [[ "$LINT_FAILED" == "true" ]]; then
+            exit 1
+          fi
+
+      - name: Helm template validation (argocd-apps)
+        if: ${{ inputs.run_argocd_apps == 'true' }}
+        run: |
+          echo "🔍 Validating argocd-apps templates..."
+          
+          TEMPLATE_FLAGS="--validate"
+          if [[ "${{ inputs.debug_mode }}" == "true" ]]; then
+            TEMPLATE_FLAGS="$TEMPLATE_FLAGS --debug"
+          fi
+          
+          helm template argocd-apps ${{ inputs.argocd_chart_path }} \
+            -f ${{ inputs.argocd_values_file }} \
+            $TEMPLATE_FLAGS > template-output.yaml
+          
+          # Validate common issues
+          if grep -q "type: ClusterRole" template-output.yaml && ! grep -q "name:" template-output.yaml; then
+            echo "❌ Found ClusterRole without name field"
+            exit 1
+          fi
+          
+          # Check for empty metadata.name fields
+          if grep -A1 "metadata:" template-output.yaml | grep -q "name: $"; then
+            echo "❌ Found resource with empty name field"
+            exit 1
+          fi
+          
+          echo "✅ ArgoCD apps template validation passed"
+          rm template-output.yaml
+
+      - name: Helm template validation (helm overlays)
+        if: ${{ inputs.run_helm == 'true' }}
+        run: |
+          IFS=',' read -r -a ENV_ARR <<< "${{ inputs.envs }}"
+          for e in "${ENV_ARR[@]}"; do
+            e_trimmed="$(echo "$e" | xargs)"
+            echo "🔍 Validating helm templates for ${e_trimmed}..."
+            
+            VALUES_FILE="${{ inputs.overlays_path }}/${e_trimmed}/values.yaml"
+            if [[ ! -f "$VALUES_FILE" ]]; then
+              echo "❌ Values file not found: $VALUES_FILE"
+              exit 1
+            fi
+            
+            TEMPLATE_FLAGS="--validate"
+            if [[ "${{ inputs.debug_mode }}" == "true" ]]; then
+              TEMPLATE_FLAGS="$TEMPLATE_FLAGS --debug"
+            fi
+            
+            helm template webapp ${{ inputs.helm_chart_path }} \
+              -f "$VALUES_FILE" \
+              $TEMPLATE_FLAGS > template-output.yaml
+            
+            # Validate services array format
+            if ! grep -q "services:" template-output.yaml; then
+              echo "⚠️  No services array found in ${e_trimmed} templates"
+            fi
+
+            # Validate ingresses array format
+            if ! grep -q "ingresses:" template-output.yaml; then
+              echo "⚠️  No ingresses array found in ${e_trimmed} templates"
+            fi
+
+            # Check for empty metadata.name fields
+            if grep -A1 "metadata:" template-output.yaml | grep -q "name: $"; then
+              echo "❌ Found resource with empty name field in ${e_trimmed}"
+              exit 1
+            fi
+            
+            echo "✅ ${e_trimmed} template validation passed"
+            rm template-output.yaml
+          done
+
+      - name: Debug CHART PATH (argocd-apps)
+        if: ${{ inputs.run_argocd_apps == 'true' && inputs.debug_mode }}
+        run: |
+          echo "🐛 ArgoCD apps debug (expect CHART PATH: ${{ inputs.argocd_chart_path }})"
+          helm template argocd-apps ${{ inputs.argocd_chart_path }} \
+            -f ${{ inputs.argocd_values_file }} --debug | head -40 || true
+
+      - name: Debug CHART PATH (helm)
+        if: ${{ inputs.run_helm == 'true' && inputs.debug_mode }}
+        run: |
+          IFS=',' read -r -a ENV_ARR <<< "${{ inputs.envs }}"
+          for e in "${ENV_ARR[@]}"; do
+            e_trimmed="$(echo "$e" | xargs)"
+            echo "🐛 Helm debug for ${e_trimmed} (expect CHART PATH: ${{ inputs.helm_chart_path }})"
+            helm template webapp ${{ inputs.helm_chart_path }} \
+              -f ${{ inputs.overlays_path }}/${e_trimmed}/values.yaml --debug | head -20 || true
+          done
+
+      - name: Set lint results
+        id: lint-results
+        run: |
+          echo "status=success" >> $GITHUB_OUTPUT

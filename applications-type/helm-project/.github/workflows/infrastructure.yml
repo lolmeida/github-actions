@@ -1,0 +1,72 @@
+name: Infrastructure CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'helm/**'
+      - 'argocd-apps/**'
+      - 'overlays/**'
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options:
+          - 'staging'
+          - 'production'
+          - 'both'
+        default: 'staging'
+      force_recreate:
+        description: 'Force recreate applications'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  # Stage 1: Validate Helm Charts
+  helm-validation:
+    uses: lolmeida/reusable-github-actions/.github/workflows/helm-ci.yml@main
+    with:
+      run_argocd_apps: 'true'
+      run_helm: 'true'
+      envs: 'staging,production'
+      debug_mode: false
+
+  # Stage 2: Deploy ArgoCD Applications
+  deploy-argocd:
+    needs: helm-validation
+    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-deploy.yml@main
+    with:
+      dry_run: false
+      appset_enabled: 'true'
+      appset_list_enabled: 'true'
+      appset_git_enabled: 'false'
+      force_recreate: ${{ github.event.inputs.force_recreate || 'false' }}
+      validation_environment: 'production'
+      wait_timeout: '15m'
+    secrets:
+      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+
+  # Stage 3: Sync Applications (conditional on input)
+  sync-staging:
+    needs: deploy-argocd
+    if: contains(fromJson('["staging", "both"]'), github.event.inputs.deploy_environment) || github.event_name == 'push'
+    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-manage.yml@main
+    with:
+      action: sync-staging
+      dry_run: false
+    secrets:
+      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+
+  sync-production:
+    needs: [deploy-argocd, sync-staging]
+    if: contains(fromJson('["production", "both"]'), github.event.inputs.deploy_environment)
+    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-manage.yml@main
+    with:
+      action: sync-prod
+      dry_run: false
+      force_delete: true
+    secrets:
+      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}

@@ -1,0 +1,84 @@
+name: Monorepo CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Detect changes
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.changes.outputs.frontend }}
+      backend: ${{ steps.changes.outputs.backend }}
+      helm: ${{ steps.changes.outputs.helm }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v2
+        id: changes
+        with:
+          filters: |
+            frontend:
+              - 'apps/frontend/**'
+            backend:
+              - 'apps/backend/**'
+            helm:
+              - 'helm/**'
+              - 'argocd-apps/**'
+
+  # Frontend pipeline
+  frontend-pipeline:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
+    uses: lolmeida/reusable-github-actions/.github/workflows/docker-build-push.yml@main
+    with:
+      image_name: my-app-frontend
+      dockerfile_path: ./apps/frontend/Dockerfile
+      build_context: ./apps/frontend
+      tag_strategy: ${{ github.ref_name }}
+    secrets:
+      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+      DOCKER_HUB_ACCESS_TOKEN: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+  # Backend pipeline
+  backend-quality:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true'
+    uses: lolmeida/reusable-github-actions/.github/workflows/spotless-check.yml@main
+    with:
+      working_directory: ./apps/backend
+      java_version: '21'
+
+  backend-build:
+    needs: [detect-changes, backend-quality]
+    if: needs.detect-changes.outputs.backend == 'true' && github.event_name == 'push'
+    uses: lolmeida/reusable-github-actions/.github/workflows/docker-jib-push.yml@main
+    with:
+      working_directory: ./apps/backend
+      image_name: my-app-backend
+      java_version: '21'
+    secrets:
+      DOCKER_HUB_USER: ${{ secrets.DOCKER_HUB_USER }}
+      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+  # Infrastructure pipeline
+  helm-pipeline:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.helm == 'true'
+    uses: lolmeida/reusable-github-actions/.github/workflows/helm-ci.yml@main
+    with:
+      run_argocd_apps: 'true'
+      run_helm: 'true'
+      envs: 'staging,production'
+
+  # Deploy after successful builds
+  deploy:
+    needs: [frontend-pipeline, backend-build, helm-pipeline]
+    if: always() && !failure() && github.ref_name == 'main'
+    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-deploy.yml@main
+    with:
+      appset_enabled: 'true'
+    secrets:
+      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}

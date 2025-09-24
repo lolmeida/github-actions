@@ -1,0 +1,131 @@
+
+name: Docker Build & Push (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        description: 'Docker image name'
+        required: true
+        type: string
+      dockerfile_path:
+        description: 'Path to Dockerfile'
+        required: false
+        type: string
+        default: './Dockerfile'
+      build_context:
+        description: 'Build context path'
+        required: false
+        type: string
+        default: '.'
+      build_args:
+        description: 'Build arguments (multiline string)'
+        required: false
+        type: string
+        default: ''
+      platforms:
+        description: 'Target platforms'
+        required: false
+        type: string
+        default: 'linux/amd64,linux/arm64'
+      api_base_url:
+        description: 'API Base URL for frontend builds'
+        required: false
+        type: string
+        default: ''
+      push_enabled:
+        description: 'Enable push to registry'
+        required: false
+        type: boolean
+        default: true
+      cache_enabled:
+        description: 'Enable GitHub Actions cache'
+        required: false
+        type: boolean
+        default: true
+      tag_strategy:
+        description: 'Tagging strategy'
+        required: false
+        type: string
+        default: 'latest'
+      registry:
+        description: 'Docker registry'
+        required: false
+        type: string
+        default: 'docker.io'
+    secrets:
+      DOCKER_HUB_USERNAME:
+        required: true
+      DOCKER_HUB_ACCESS_TOKEN:
+        required: true
+    outputs:
+      image_digest:
+        description: 'Image digest'
+        value: ${{ jobs.build-and-push.outputs.digest }}
+      image_tags:
+        description: 'Image tags'
+        value: ${{ jobs.build-and-push.outputs.tags }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build-push.outputs.digest }}
+      tags: ${{ steps.meta.outputs.tags }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Registry
+        if: ${{ inputs.push_enabled }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.registry }}/${{ secrets.DOCKER_HUB_USERNAME }}/${{ inputs.image_name }}
+          tags: |
+            type=raw,value=${{ inputs.tag_strategy }}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value={{date 'YYYYMMDD-HHmmss'}}
+
+      - name: Prepare build args
+        id: build-args
+        run: |
+          ARGS="${{ inputs.build_args }}"
+          if [[ -n "${{ inputs.api_base_url }}" ]]; then
+            ARGS="${ARGS}${ARGS:+$'\n'}VITE_API_BASE_URL=${{ inputs.api_base_url }}"
+          fi
+          echo "BUILD_ARGS<<EOF" >> $GITHUB_OUTPUT
+          echo "$ARGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        id: build-push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          push: ${{ inputs.push_enabled }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: ${{ inputs.platforms }}
+          cache-from: ${{ inputs.cache_enabled && 'type=gha' || '' }}
+          cache-to: ${{ inputs.cache_enabled && 'type=gha,mode=max' || '' }}
+          build-args: ${{ steps.build-args.outputs.BUILD_ARGS }}
+
+      - name: Output image info
+        run: |
+          echo "Image digest: ${{ steps.build-push.outputs.digest }}"
+          echo "Image tags: ${{ steps.meta.outputs.tags }}"

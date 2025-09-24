@@ -1,0 +1,296 @@
+name: ArgoCD Deploy (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: "Perform a dry-run only (validate but don't apply)"
+        required: false
+        type: boolean
+        default: false
+      appset_enabled:
+        description: "Enable ApplicationSet"
+        required: false
+        type: string
+        default: "true"
+      appset_list_enabled:
+        description: "Enable ApplicationSet List Generator"
+        required: false
+        type: string
+        default: "true"
+      appset_git_enabled:
+        description: "Enable ApplicationSet Git Generator"
+        required: false
+        type: string
+        default: "false"
+      force_recreate:
+        description: "Delete existing ArgoCD Applications before deploy"
+        required: false
+        type: string
+        default: "false"
+      rollback_first:
+        description: "Rollback Helm release before deploy"
+        required: false
+        type: string
+        default: "false"
+      helm_version:
+        description: "Helm version to use"
+        required: false
+        type: string
+        default: "3.12.0"
+      argocd_chart_path:
+        description: "Path to ArgoCD apps chart"
+        required: false
+        type: string
+        default: "./argocd-apps"
+      argocd_values_file:
+        description: "ArgoCD values file"
+        required: false
+        type: string
+        default: "argocd-apps/values.yaml"
+      argocd_namespace:
+        description: "ArgoCD namespace"
+        required: false
+        type: string
+        default: "argocd"
+      app_namespace:
+        description: "Application namespace"
+        required: false
+        type: string
+        default: "lolmeida"
+      helm_release_name:
+        description: "Helm release name"
+        required: false
+        type: string
+        default: "argocd-apps"
+      wait_timeout:
+        description: "Helm wait timeout"
+        required: false
+        type: string
+        default: "10m"
+      validation_environment:
+        description: "Environment to validate (production, staging, etc.)"
+        required: false
+        type: string
+        default: "production"
+    secrets:
+      KUBE_CONFIG:
+        required: true
+    outputs:
+      deployment_status:
+        description: "Deployment status"
+        value: ${{ jobs.deploy.outputs.status }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.deployment-result.outputs.status }}
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: ${{ inputs.helm_version }}
+
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        method: kubeconfig
+        kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+    - name: Verify cluster connection
+      run: |
+        echo "🔍 Verifying cluster connection..."
+        kubectl version --short
+        kubectl config current-context
+
+    - name: Ensure required namespaces exist
+      run: |
+        echo "🔧 Creating namespaces if they don't exist..."
+        kubectl create namespace ${{ inputs.app_namespace }} --dry-run=client -o yaml | kubectl apply --validate=false -f -
+        kubectl create namespace ${{ inputs.argocd_namespace }} --dry-run=client -o yaml | kubectl apply --validate=false -f -
+
+    - name: Verify chart paths and files
+      run: |
+        echo "🔍 Verifying chart structure..."
+        if [[ ! -d "${{ inputs.argocd_chart_path }}" ]]; then
+          echo "❌ ArgoCD chart path not found: ${{ inputs.argocd_chart_path }}"
+          exit 1
+        fi
+        
+        if [[ ! -f "${{ inputs.argocd_values_file }}" ]]; then
+          echo "❌ ArgoCD values file not found: ${{ inputs.argocd_values_file }}"
+          exit 1
+        fi
+        
+        echo "✅ Chart structure verified"
+
+    - name: Helm lint (charts)
+      run: |
+        echo "🔍 Linting charts..."
+        helm lint ${{ inputs.argocd_chart_path }} --strict
+        if [[ -d "./helm" ]]; then
+          helm lint ./helm --strict
+        fi
+        echo "✅ Lint validation passed"
+
+    - name: Validate resources (dry-run)
+      run: |
+        echo "🔍 Validating resources for ${{ inputs.validation_environment }} environment..."
+        
+        # Generate and validate templates
+        helm template webapp ./helm \
+          -f overlays/${{ inputs.validation_environment }}/values.yaml \
+          --validate --debug > template-output.yaml
+
+        # Validate array formats
+        echo "Checking array-based resources..."
+        
+        # Services validation
+        if ! grep -q "kind: Service" template-output.yaml; then
+          echo "⚠️  No Service resources found"
+        else
+          if ! grep -B5 "kind: Service" template-output.yaml | grep -q "ports:"; then
+            echo "❌ Found Service without ports array"
+            exit 1
+          fi
+        fi
+
+        # Resource name validation
+        if grep -A1 "metadata:" template-output.yaml | grep -q "name: $"; then
+          echo "❌ Found resource with empty name field"
+          exit 1
+        fi
+
+        # Apply validation
+        echo "Running kubectl apply dry-run..."
+        kubectl apply --dry-run=server -f template-output.yaml
+        rm template-output.yaml
+        echo "✅ Resource validation passed"
+
+    - name: Optional Helm rollback to previous revision
+      if: ${{ inputs.rollback_first == 'true' }}
+      run: |
+        set +e
+        echo "🔄 Checking release ${{ inputs.helm_release_name }} for rollback..."
+        if helm status "${{ inputs.helm_release_name }}" -n "${{ inputs.argocd_namespace }}" >/dev/null 2>&1; then
+          last_rev=$(helm history "${{ inputs.helm_release_name }}" -n "${{ inputs.argocd_namespace }}" | awk 'NR>1{print $1}' | tail -1)
+          if [ -n "$last_rev" ] && [ "$last_rev" -gt 1 ] 2>/dev/null; then
+            prev_rev=$((last_rev-1))
+            echo "Rolling back ${{ inputs.helm_release_name }} from rev $last_rev to $prev_rev..."
+            helm rollback "${{ inputs.helm_release_name }}" "$prev_rev" -n "${{ inputs.argocd_namespace }}" --wait || true
+          else
+            echo "Not enough history to rollback. Skipping."
+          fi
+        else
+          echo "Release not found. Skipping rollback."
+        fi
+
+    - name: Optional delete existing ArgoCD Applications
+      if: ${{ inputs.force_recreate == 'true' }}
+      run: |
+        echo "🗑️ Force recreate requested - deleting existing resources..."
+        echo "Deleting ApplicationSets with label app=apps in namespace ${{ inputs.argocd_namespace }}"
+        kubectl delete applicationsets.argoproj.io -n "${{ inputs.argocd_namespace }}" -l app="apps" --ignore-not-found=true || true
+        echo "Deleting Applications with label app=apps in namespace ${{ inputs.argocd_namespace }}"
+        kubectl delete applications.argoproj.io -n "${{ inputs.argocd_namespace }}" -l app="apps" --ignore-not-found=true || true
+        echo "Waiting for cleanup..."
+        sleep 5
+        
+        # Handle stuck applications with finalizers
+        REMAINING=$(kubectl get applications.argoproj.io -n "${{ inputs.argocd_namespace }}" -l app="apps" -o name)
+        if [ -n "$REMAINING" ]; then
+          echo "Patching remaining Applications to remove finalizers..."
+          for app in $REMAINING; do
+            kubectl patch $app -n "${{ inputs.argocd_namespace }}" -p '{"metadata":{"finalizers":[]}}' --type=merge || true
+          done
+        fi
+        echo "✅ Cleanup completed"
+
+    - name: Build Helm deployment flags
+      id: helm-flags
+      run: |
+        FLAGS=()
+        FLAGS+=("--values" "${{ inputs.argocd_values_file }}")
+        FLAGS+=("--namespace" "${{ inputs.argocd_namespace }}")
+        FLAGS+=("--create-namespace")
+        FLAGS+=("--wait")
+        FLAGS+=("--timeout" "${{ inputs.wait_timeout }}")
+        
+        # Add dry-run flag if enabled
+        if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+          FLAGS+=("--dry-run")
+          echo "🔍 DRY-RUN mode enabled"
+        fi
+        
+        # ApplicationSet toggles
+        if [[ -n "${{ inputs.appset_enabled }}" ]]; then
+          FLAGS+=("--set" "applicationSet.enabled=${{ inputs.appset_enabled }}")
+        fi
+        if [[ -n "${{ inputs.appset_list_enabled }}" ]]; then
+          FLAGS+=("--set" "applicationSet.generators.list.enabled=${{ inputs.appset_list_enabled }}")
+        fi
+        if [[ -n "${{ inputs.appset_git_enabled }}" ]]; then
+          FLAGS+=("--set" "applicationSet.generators.git.enabled=${{ inputs.appset_git_enabled }}")
+        fi
+        
+        # Convert array to string for output
+        FLAGS_STR="${FLAGS[*]}"
+        echo "helm_flags=$FLAGS_STR" >> $GITHUB_OUTPUT
+        echo "Helm flags: $FLAGS_STR"
+
+    - name: Deploy ArgoCD Apps (ApplicationSet)
+      id: helm-deploy
+      run: |
+        set +e
+        echo "🚀 Deploying ArgoCD Applications..."
+        if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+          echo "Running in DRY-RUN mode - changes will not be applied"
+        fi
+        
+        helm upgrade --install "${{ inputs.helm_release_name }}" ${{ inputs.argocd_chart_path }} ${{ steps.helm-flags.outputs.helm_flags }}
+        HELM_EXIT_CODE=$?
+        
+        if [[ $HELM_EXIT_CODE -eq 0 ]]; then
+          echo "✅ Helm deployment successful"
+          echo "deploy_status=success" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Helm deployment failed with exit code $HELM_EXIT_CODE"
+          echo "deploy_status=failed" >> $GITHUB_OUTPUT
+          exit $HELM_EXIT_CODE
+        fi
+
+    - name: Inspect ApplicationSets
+      if: ${{ inputs.dry_run == false }}
+      run: |
+        echo "📋 Listing ApplicationSets in ${{ inputs.argocd_namespace }} namespace"
+        kubectl get applicationsets -n ${{ inputs.argocd_namespace }} || true
+
+    - name: Wait for Applications to be Created
+      if: ${{ inputs.dry_run == false }}
+      run: |
+        echo "⏳ Waiting for ArgoCD to create applications..."
+        sleep 30
+        kubectl get applications -n ${{ inputs.argocd_namespace }}
+
+    - name: Check Sync Status
+      if: ${{ inputs.dry_run == false }}
+      run: |
+        echo "📊 Checking application sync status..."
+        kubectl get applications -n ${{ inputs.argocd_namespace }} \
+          -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.sync.status}{"\n"}{end}' || true
+
+    - name: Set deployment result
+      id: deployment-result
+      run: |
+        if [[ "${{ steps.helm-deploy.outputs.deploy_status }}" == "success" ]]; then
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "✅ Deployment completed successfully"
+        else
+          echo "status=failed" >> $GITHUB_OUTPUT
+          echo "❌ Deployment failed"
+        fi

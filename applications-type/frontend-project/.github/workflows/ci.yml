@@ -1,0 +1,43 @@
+name: Frontend CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: 'API Base URL'
+        required: false
+        type: choice
+        options:
+          - 'https://api.production.com'
+          - 'https://api.staging.com'
+          - 'https://api.dev.com'
+        default: 'https://api.production.com'
+      deploy_environment:
+        description: 'Deploy environment'
+        required: false
+        type: choice
+        options:
+          - 'production'
+          - 'staging'
+          - 'development'
+        default: 'staging'
+
+jobs:
+  build-and-push:
+    if: github.event_name == 'push' && contains(fromJson('["main", "develop"]'), github.ref_name)
+    uses: lolmeida/reusable-github-actions/.github/workflows/docker-build-push.yml@main
+    with:
+      image_name: my-frontend-app
+      dockerfile_path: ./Dockerfile
+      build_context: .
+      platforms: linux/amd64,linux/arm64
+      api_base_url: ${{ github.event.inputs.api_base_url || (github.ref_name == 'main' && 'https://api.production.com' || 'https://api.staging.com') }}
+      tag_strategy: ${{ github.ref_name == 'main' && 'latest' || github.ref_name }}
+      push_enabled: true
+    secrets:
+      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+      DOCKER_HUB_ACCESS_TOKEN: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
