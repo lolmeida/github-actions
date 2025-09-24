@@ -1,0 +1,113 @@
+name: Add App to API
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'Application name'
+        required: true
+        default: 'ArgoCD'
+      app_url:
+        description: 'Application URL'
+        required: true
+        default: 'https://argo-cd.lolmeida.com'
+      app_description:
+        description: 'Application description'
+        required: true
+        default: 'Declarative GitOps CD for Kubernetes.'
+      app_icon:
+        description: 'Icon URL'
+        required: false
+        default: 'https://placehold.co/600x400/white/gray?text=DOMO'
+      is_active:
+        description: 'Is the application active?'
+        required: false
+        default: 'true'
+      is_enabled:
+        description: 'Is the application enabled?'
+        required: false
+        default: 'true'
+      api_username:
+        description: 'API Username'
+        required: true
+        default: 'test'
+      api_password:
+        description: 'API Password'
+        required: true
+        default: 'test1234'
+
+jobs:
+  add-app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get Bearer Token
+        id: get_token
+        env:
+          API_USERNAME: ${{ github.event.inputs.api_username }}
+          API_PASSWORD: ${{ github.event.inputs.api_password }}
+        run: |
+          TOKEN_RESPONSE=$(curl -s -X POST \
+            'http://localhost:8080/auth/login' \
+            -H 'accept: */*' \
+            -H 'Content-Type: application/json' \
+            -d '{"username": "'$API_USERNAME'", "password": "'$API_PASSWORD'"}')
+          echo "Token response: $TOKEN_RESPONSE"
+          TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r .token)
+          if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
+            echo "Failed to get token" >&2
+            exit 1
+          fi
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Add App via API
+        env:
+          APP_NAME: ${{ github.event.inputs.app_name }}
+          APP_URL: ${{ github.event.inputs.app_url }}
+          APP_DESCRIPTION: ${{ github.event.inputs.app_description }}
+          APP_ICON: ${{ github.event.inputs.app_icon }}
+          IS_ACTIVE: ${{ github.event.inputs.is_active }}
+          IS_ENABLED: ${{ github.event.inputs.is_enabled }}
+          API_BEARER_TOKEN: ${{ steps.get_token.outputs.token }}
+        run: |
+          # Set defaults for optional fields if not provided
+          APP_ICON_VALUE="$APP_ICON"
+          if [ -z "$APP_ICON_VALUE" ]; then
+            APP_ICON_VALUE="https://placehold.co/600x400/white/gray?text=$APP_NAME"
+          fi
+          IS_ACTIVE_VALUE="$IS_ACTIVE"
+          if [ -z "$IS_ACTIVE_VALUE" ]; then
+            IS_ACTIVE_VALUE="true"
+          fi
+          IS_ENABLED_VALUE="$IS_ENABLED"
+          if [ -z "$IS_ENABLED_VALUE" ]; then
+            IS_ENABLED_VALUE="true"
+          fi
+
+          # Prepare JSON payload
+          JSON_PAYLOAD=$(jq -n \
+            --arg name "$APP_NAME" \
+            --arg url "$APP_URL" \
+            --arg description "$APP_DESCRIPTION" \
+            --arg icon "$APP_ICON_VALUE" \
+            --argjson isActive "$IS_ACTIVE_VALUE" \
+            --argjson isEnabled "$IS_ENABLED_VALUE" \
+            '{name: $name, url: $url, description: $description, icon: $icon, isActive: $isActive, isEnabled: $isEnabled}'
+          )
+
+          response=$(curl -X 'POST' \
+            'https://apps-be.lolmeida.com/api/apps' \
+            -H 'accept: application/json' \
+            -H "Authorization: Bearer $API_BEARER_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d "$JSON_PAYLOAD" \
+            -w "HTTP_STATUS:%{http_code}")
+
+          echo "API Response: $response"
+
+          # Check if the response was successful
+          if [[ $response == *"HTTP_STATUS:200"* ]] || [[ $response == *"HTTP_STATUS:201"* ]]; then
+            echo "✅ App added successfully!"
+          else
+            echo "❌ Error adding app"
+            exit 1
+          fi

@@ -27,7 +27,7 @@ on:
 jobs:
   # Stage 1: Validate Helm Charts
   helm-validation:
-    uses: lolmeida/reusable-github-actions/.github/workflows/helm-ci.yml@main
+    uses: lolmeida/github-actions/.github/workflows/helm-ci.yml@main
     with:
       run_argocd_apps: 'true'
       run_helm: 'true'
@@ -37,7 +37,7 @@ jobs:
   # Stage 2: Deploy ArgoCD Applications
   deploy-argocd:
     needs: helm-validation
-    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-deploy.yml@main
+    uses: lolmeida/github-actions/.github/workflows/argocd-deploy.yml@main
     with:
       dry_run: false
       appset_enabled: 'true'
@@ -53,7 +53,7 @@ jobs:
   sync-staging:
     needs: deploy-argocd
     if: contains(fromJson('["staging", "both"]'), github.event.inputs.deploy_environment) || github.event_name == 'push'
-    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-manage.yml@main
+    uses: lolmeida/github-actions/.github/workflows/argocd-manage.yml@main
     with:
       action: sync-staging
       dry_run: false
@@ -63,7 +63,7 @@ jobs:
   sync-production:
     needs: [deploy-argocd, sync-staging]
     if: contains(fromJson('["production", "both"]'), github.event.inputs.deploy_environment)
-    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-manage.yml@main
+    uses: lolmeida/github-actions/.github/workflows/argocd-manage.yml@main
     with:
       action: sync-prod
       dry_run: false

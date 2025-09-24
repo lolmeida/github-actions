@@ -15,7 +15,7 @@ jobs:
   # Stage 1: Code Quality
   spotless-check:
     if: contains(fromJson('["java", "kotlin"]'), github.event.repository.language)
-    uses: lolmeida/reusable-github-actions/.github/workflows/spotless-check.yml@main
+    uses: lolmeida/github-actions/.github/workflows/spotless-check.yml@main
     with:
       java_version: '21'
       auto_fix: ${{ github.event_name == 'pull_request' }}
@@ -36,7 +36,7 @@ jobs:
   docker-build:
     needs: build
     if: github.event_name == 'push' && (env.IS_MAIN_BRANCH == 'true' || env.IS_DEVELOP_BRANCH == 'true')
-    uses: lolmeida/reusable-github-actions/.github/workflows/docker-jib-push.yml@main
+    uses: lolmeida/github-actions/.github/workflows/docker-jib-push.yml@main
     with:
       java_version: '21'
       image_name: ${{ env.SERVICE_NAME }}
@@ -49,7 +49,7 @@ jobs:
   deploy-staging:
     needs: docker-build
     if: env.IS_DEVELOP_BRANCH == 'true'
-    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-manage.yml@main
+    uses: lolmeida/github-actions/.github/workflows/argocd-manage.yml@main
     with:
       action: sync-staging
       dry_run: false
@@ -60,7 +60,7 @@ jobs:
   deploy-production:
     needs: docker-build
     if: env.IS_MAIN_BRANCH == 'true'
-    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-manage.yml@main
+    uses: lolmeida/github-actions/.github/workflows/argocd-manage.yml@main
     with:
       action: sync-prod
       dry_run: false

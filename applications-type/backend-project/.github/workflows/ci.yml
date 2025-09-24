@@ -8,7 +8,7 @@ on:
 
 jobs:
   code-quality:
-    uses: lolmeida/reusable-github-actions/.github/workflows/spotless-check.yml@main
+    uses: lolmeida/github-actions/.github/workflows/spotless-check.yml@main
     with:
       java_version: '21'
       java_distribution: 'temurin'
@@ -18,7 +18,7 @@ jobs:
   build-and-push:
     needs: code-quality
     if: github.event_name == 'push'
-    uses: lolmeida/reusable-github-actions/.github/workflows/docker-jib-push.yml@main
+    uses: lolmeida/github-actions/.github/workflows/docker-jib-push.yml@main
     with:
       java_version: '21'
       image_name: my-backend-service
@@ -27,3 +27,17 @@ jobs:
     secrets:
       DOCKER_HUB_USER: ${{ secrets.DOCKER_HUB_USER }}
       DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+      
+  create-app-entry:
+    needs: build-and-push
+    if: github.event_name == 'push'
+    uses: lolmeida/github-actions/.github/workflows/post-app-to-db.yml@main
+    with:
+      app_name: My Backend Service
+      app_url: https://my-backend-service.example.com
+      app_description: 'This is my backend service for handling user authentication and data processing.'
+      app_icon: 'https://placehold.co/600x400/white/gray?text=My+Backend+Service'
+      is_active: true
+      is_enabled: true
+      api_username: ${{ secrets.API_USERNAME }}
+      api_password: ${{ secrets.API_PASSWORD }}

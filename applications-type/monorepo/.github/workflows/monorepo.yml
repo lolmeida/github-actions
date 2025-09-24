@@ -32,7 +32,7 @@ jobs:
   frontend-pipeline:
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true'
-    uses: lolmeida/reusable-github-actions/.github/workflows/docker-build-push.yml@main
+    uses: lolmeida/github-actions/.github/workflows/docker-build-push.yml@main
     with:
       image_name: my-app-frontend
       dockerfile_path: ./apps/frontend/Dockerfile
@@ -46,7 +46,7 @@ jobs:
   backend-quality:
     needs: detect-changes
     if: needs.detect-changes.outputs.backend == 'true'
-    uses: lolmeida/reusable-github-actions/.github/workflows/spotless-check.yml@main
+    uses: lolmeida/github-actions/.github/workflows/spotless-check.yml@main
     with:
       working_directory: ./apps/backend
       java_version: '21'
@@ -54,7 +54,7 @@ jobs:
   backend-build:
     needs: [detect-changes, backend-quality]
     if: needs.detect-changes.outputs.backend == 'true' && github.event_name == 'push'
-    uses: lolmeida/reusable-github-actions/.github/workflows/docker-jib-push.yml@main
+    uses: lolmeida/github-actions/.github/workflows/docker-jib-push.yml@main
     with:
       working_directory: ./apps/backend
       image_name: my-app-backend
@@ -67,7 +67,7 @@ jobs:
   helm-pipeline:
     needs: detect-changes
     if: needs.detect-changes.outputs.helm == 'true'
-    uses: lolmeida/reusable-github-actions/.github/workflows/helm-ci.yml@main
+    uses: lolmeida/github-actions/.github/workflows/helm-ci.yml@main
     with:
       run_argocd_apps: 'true'
       run_helm: 'true'
@@ -77,7 +77,7 @@ jobs:
   deploy:
     needs: [frontend-pipeline, backend-build, helm-pipeline]
     if: always() && !failure() && github.ref_name == 'main'
-    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-deploy.yml@main
+    uses: lolmeida/github-actions/.github/workflows/argocd-deploy.yml@main
     with:
       appset_enabled: 'true'
     secrets:
