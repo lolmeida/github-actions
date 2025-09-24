@@ -29,7 +29,7 @@ on:
 jobs:
   build-and-push:
     if: github.event_name == 'push' && contains(fromJson('["main", "develop"]'), github.ref_name)
-    uses: lolmeida/reusable-github-actions/.github/workflows/docker-build-push.yml@main
+    uses: lolmeida/github-actions/.github/workflows/docker-build-push.yml@main
     with:
       image_name: my-frontend-app
       dockerfile_path: ./Dockerfile
