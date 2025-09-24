@@ -39,8 +39,6 @@ jobs:
       app_icon: 'https://placehold.co/600x400/white/gray?text=My+Backend+Service'
       is_active: true
       is_enabled: true
-      api_username: ${{ secrets.API_USERNAME }}
-      api_password: ${{ secrets.API_PASSWORD }}
     secrets:
       API_USERNAME: ${{ secrets.API_USERNAME }}
       API_PASSWORD: ${{ secrets.API_PASSWORD }}
