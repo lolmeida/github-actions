@@ -113,8 +113,8 @@ jobs:
       tag_strategy: ${{ github.ref_name == 'main' && 'latest' || github.ref_name }}
       push_enabled: true
     secrets:
-      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
-      DOCKER_HUB_ACCESS_TOKEN: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+      DOCKER_HUB_USER: ${{ secrets.DOCKER_HUB_USER }}
+      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
 ```
 
 ### 3. Helm Project
@@ -292,8 +292,8 @@ jobs:
       build_context: ./apps/frontend
       tag_strategy: ${{ github.ref_name }}
     secrets:
-      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
-      DOCKER_HUB_ACCESS_TOKEN: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+      DOCKER_HUB_USER: ${{ secrets.DOCKER_HUB_USER }}
+      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
   backend-quality:
     needs: detect-changes
     if: needs.detect-changes.outputs.backend == 'true'

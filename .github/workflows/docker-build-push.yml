@@ -54,9 +54,9 @@ on:
         type: string
         default: 'docker.io'
     secrets:
-      DOCKER_HUB_USERNAME:
+      DOCKER_HUB_USER:
         required: true
-      DOCKER_HUB_ACCESS_TOKEN:
+      DOCKER_HUB_TOKEN:
         required: true
     outputs:
       image_digest:
@@ -85,14 +85,14 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ inputs.registry }}
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+          username: ${{ secrets.DOCKER_HUB_USER }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ inputs.registry }}/${{ secrets.DOCKER_HUB_USERNAME }}/${{ inputs.image_name }}
+          images: ${{ inputs.registry }}/${{ secrets.DOCKER_HUB_USER }}/${{ inputs.image_name }}
           tags: |
             type=raw,value=${{ inputs.tag_strategy }}
             type=ref,event=branch
