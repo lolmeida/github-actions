@@ -38,7 +38,7 @@ This project is licensed under the MIT License. See the LICENSE file for more de
 
 ### 1. Backend Project
 1- create file `.github/workflows/ci.yml`
-```bash
+```code
 mkdir -p .github/workflows/
 touch .github/workflows/ci.yml
 ```
@@ -83,7 +83,7 @@ jobs:
 
 ### 2. Frontend Project
 1- create file `.github/workflows/ci.yml`
-```bash
+```code
 mkdir -p .github/workflows/
 touch .github/workflows/ci.yml
 ```
@@ -115,11 +115,17 @@ jobs:
 ---
 
 ### 3. Helm Project
+1- create file `.github/workflows/ci.yml`
+```code
+mkdir -p .github/workflows/
+touch .github/workflows/ci.yml
+```
 
-Arquivo: `applications-type/helm-project/.github/workflows/infrastructure.yml`
+2- add the following content to the file `.github/workflows/ci.yml`
 
 ```yaml
-name: Infrastructure CI/CD
+name: Infrastructure Pipeline
+
 on:
   push:
     branches: [main]
@@ -129,118 +135,116 @@ on:
       - 'overlays/**'
   workflow_dispatch:
     inputs:
-      deploy_environment:
-        description: 'Environment to deploy'
-        required: true
+      environment:
+        description: 'Deploy environment'
         type: choice
-        options:
-          - 'staging'
-          - 'production'
-          - 'both'
+        options: ['staging', 'production', 'both']
         default: 'staging'
-      force_recreate:
-        description: 'Force recreate applications'
-        required: false
-        type: boolean
-        default: false
+
 jobs:
-  helm-validation:
-    uses: lolmeida/reusable-github-actions/.github/workflows/helm-ci.yml@main
+  # 1. Validar charts Helm
+  validate-helm:
+    uses: lolmeida/github-actions/.github/workflows/helm-ci.yml@main
     with:
       run_argocd_apps: 'true'
       run_helm: 'true'
       envs: 'staging,production'
-      debug_mode: false
+
+  # 2. Deploy ArgoCD applications
   deploy-argocd:
-    needs: helm-validation
-    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-deploy.yml@main
+    needs: validate-helm
+    uses: lolmeida/github-actions/.github/workflows/argocd-deploy.yml@main
     with:
-      dry_run: false
       appset_enabled: 'true'
       appset_list_enabled: 'true'
-      appset_git_enabled: 'false'
-      force_recreate: ${{ github.event.inputs.force_recreate || 'false' }}
-      validation_environment: 'production'
-      wait_timeout: '15m'
+      force_recreate: 'false'
+      wait_timeout: '10m'
     secrets:
       KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-  sync-staging:
+
+  # 3. Sync applications baseado no input
+  sync-apps:
     needs: deploy-argocd
-    if: contains(fromJson('["staging", "both"]'), github.event.inputs.deploy_environment) || github.event_name == 'push'
-    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-manage.yml@main
+    if: github.event_name == 'workflow_dispatch'
+    uses: lolmeida/github-actions/.github/workflows/argocd-manage.yml@main
     with:
-      action: sync-staging
+      action: sync-${{ github.event.inputs.environment }}
       dry_run: false
-    secrets:
-      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-  sync-production:
-    needs: [deploy-argocd, sync-staging]
-    if: contains(fromJson('["production", "both"]'), github.event.inputs.deploy_environment)
-    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-manage.yml@main
-    with:
-      action: sync-prod
-      dry_run: false
-      force_delete: true
     secrets:
       KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
 ```
 
 ### 4. Microservice
+```code
+mkdir -p .github/workflows/
+touch .github/workflows/ci.yml
+```
 
-Arquivo: `applications-type/microservice/.github/workflows/ci-cd.yml`
+2- add the following content to the file `.github/workflows/ci.yml`
 
 ```yaml
-name: Microservice CI/CD Pipeline
+name: Microservice Pipeline
+
 on:
   push:
-    branches: [main, 'feature/*']
+    branches: [main, develop, 'feature/*']
   pull_request:
-    branches: [main]
+    branches: [main, develop]
+
 env:
-  SERVICE_NAME: user-management-service
-  IS_MAIN_BRANCH: ${{ github.ref_name == 'main' }}
-  IS_DEVELOP_BRANCH: ${{ github.ref_name == 'develop' }}
+  SERVICE_NAME: user-service
+  IMAGE_NAME: my-org/user-service
+
 jobs:
-  spotless-check:
-    if: contains(fromJson('["java", "kotlin"]'), github.event.repository.language)
-    uses: lolmeida/reusable-github-actions/.github/workflows/spotless-check.yml@main
+  # Stage 1: Qualidade do código
+  quality-check:
+    uses: lolmeida/github-actions/.github/workflows/spotless-check.yml@main
     with:
       java_version: '21'
       auto_fix: ${{ github.event_name == 'pull_request' }}
-  build:
-    needs: spotless-check
-    if: always() && !failure()
+
+  # Stage 2: Testes (custom)
+  tests:
+    needs: quality-check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
       - name: Run tests
-        run: |
-          echo "Running tests for ${{ env.SERVICE_NAME }}"
-          # Your test commands here
-  docker-build:
-    needs: build
-    if: github.event_name == 'push' && (env.IS_MAIN_BRANCH == 'true' || env.IS_DEVELOP_BRANCH == 'true')
-    uses: lolmeida/reusable-github-actions/.github/workflows/docker-jib-push.yml@main
+        run: ./mvnw test
+
+  # Stage 3: Build (apenas para main/develop)
+  build-image:
+    needs: tests
+    if: github.event_name == 'push' && contains(fromJson('["main", "develop"]'), github.ref_name)
+    uses: lolmeida/github-actions/.github/workflows/docker-jib-push.yml@main
     with:
       java_version: '21'
       image_name: ${{ env.SERVICE_NAME }}
-      maven_profiles: ${{ env.IS_MAIN_BRANCH == 'true' && 'prod' || 'staging' }}
+      maven_profiles: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
     secrets:
       DOCKER_HUB_USER: ${{ secrets.DOCKER_HUB_USER }}
       DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+  # Stage 4: Deploy to staging (develop)
   deploy-staging:
-    needs: docker-build
-    if: env.IS_DEVELOP_BRANCH == 'true'
-    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-manage.yml@main
+    needs: build-image
+    if: github.ref_name == 'develop'
+    uses: lolmeida/github-actions/.github/workflows/argocd-manage.yml@main
     with:
       action: sync-staging
       dry_run: false
     secrets:
       KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+
+  # Stage 5: Deploy to production (main)
   deploy-production:
-    needs: docker-build
-    if: env.IS_MAIN_BRANCH == 'true'
-    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-manage.yml@main
+    needs: build-image
+    if: github.ref_name == 'main'
+    uses: lolmeida/github-actions/.github/workflows/argocd-manage.yml@main
     with:
       action: sync-prod
       dry_run: false
@@ -249,17 +253,24 @@ jobs:
 ```
 
 ### 5. Monorepo
+```code
+mkdir -p .github/workflows/
+touch .github/workflows/ci.yml
+```
 
-Arquivo: `applications-type/monorepo/.github/workflows/monorepo.yml`
+2- add the following content to the file `.github/workflows/ci.yml`
 
 ```yaml
 name: Monorepo CI/CD
+
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
     branches: [main]
+
 jobs:
+  # Detectar mudanças
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
@@ -278,51 +289,124 @@ jobs:
               - 'apps/backend/**'
             helm:
               - 'helm/**'
-              - 'argocd-apps/**'
-  frontend-pipeline:
+
+  # Pipeline frontend
+  frontend-build:
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true'
-    uses: lolmeida/reusable-github-actions/.github/workflows/docker-build-push.yml@main
+    uses: lolmeida/github-actions/.github/workflows/docker-build-push.yml@main
     with:
-      image_name: my-app-frontend
+      image_name: monorepo-frontend
       dockerfile_path: ./apps/frontend/Dockerfile
       build_context: ./apps/frontend
-      tag_strategy: ${{ github.ref_name }}
     secrets:
-      DOCKER_HUB_USER: ${{ secrets.DOCKER_HUB_USER }}
-      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+      DOCKER_HUB_ACCESS_TOKEN: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+  # Pipeline backend
   backend-quality:
     needs: detect-changes
     if: needs.detect-changes.outputs.backend == 'true'
-    uses: lolmeida/reusable-github-actions/.github/workflows/spotless-check.yml@main
+    uses: lolmeida/github-actions/.github/workflows/spotless-check.yml@main
     with:
       working_directory: ./apps/backend
       java_version: '21'
+
   backend-build:
     needs: [detect-changes, backend-quality]
     if: needs.detect-changes.outputs.backend == 'true' && github.event_name == 'push'
-    uses: lolmeida/reusable-github-actions/.github/workflows/docker-jib-push.yml@main
+    uses: lolmeida/github-actions/.github/workflows/docker-jib-push.yml@main
     with:
       working_directory: ./apps/backend
-      image_name: my-app-backend
+      image_name: monorepo-backend
       java_version: '21'
     secrets:
       DOCKER_HUB_USER: ${{ secrets.DOCKER_HUB_USER }}
       DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
-  helm-pipeline:
+
+  # Pipeline Helm
+  helm-validation:
     needs: detect-changes
     if: needs.detect-changes.outputs.helm == 'true'
-    uses: lolmeida/reusable-github-actions/.github/workflows/helm-ci.yml@main
+    uses: lolmeida/github-actions/.github/workflows/helm-ci.yml@main
     with:
-      run_argocd_apps: 'true'
       run_helm: 'true'
       envs: 'staging,production'
-  deploy:
-    needs: [frontend-pipeline, backend-build, helm-pipeline]
-    if: always() && !failure() && github.ref_name == 'main'
-    uses: lolmeida/reusable-github-actions/.github/workflows/argocd-deploy.yml@main
+```
+---
+
+### 5. Manage ArgoCD
+```code
+mkdir -p .github/workflows/
+touch .github/workflows/ci.yml
+```
+
+2- add the following content to the file `.github/workflows/ci.yml`
+
+```yaml
+name: Manage ArgoCD
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        type: choice
+        options:
+          - 'sync-all'
+          - 'sync-staging'
+          - 'sync-prod'
+          - 'remove-staging'
+          - 'remove-prod'
+        required: true
+      dry_run:
+        description: 'Dry run mode'
+        type: boolean
+        default: true
+
+jobs:
+  manage-argocd:
+    uses: lolmeida/github-actions/.github/workflows/argocd-manage.yml@main
     with:
-      appset_enabled: 'true'
+      action: ${{ github.event.inputs.action }}
+      dry_run: ${{ github.event.inputs.dry_run }}
+    secrets:
+      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+```
+---
+
+### 6. Release Pipeline
+```code
+mkdir -p .github/workflows/
+touch .github/workflows/ci.yml
+```
+
+2- add the following content to the file `.github/workflows/ci.yml`
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-and-release:
+    uses: lolmeida/github-actions/.github/workflows/docker-build-push.yml@main
+    with:
+      image_name: ${{ github.event.repository.name }}
+      tag_strategy: ${{ github.ref_name }}
+      platforms: linux/amd64,linux/arm64
+    secrets:
+      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+      DOCKER_HUB_ACCESS_TOKEN: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+  deploy-production:
+    needs: build-and-release
+    uses: lolmeida/github-actions/.github/workflows/argocd-manage.yml@main
+    with:
+      action: sync-prod
+      dry_run: false
     secrets:
       KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
 ```
