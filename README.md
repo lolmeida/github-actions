@@ -37,85 +37,82 @@ This project is licensed under the MIT License. See the LICENSE file for more de
 ## Exemplos de Uso por Tipo de Aplicação
 
 ### 1. Backend Project
+1- create file `.github/workflows/ci.yml`
+```bash
+mkdir -p .github/workflows/
+touch .github/workflows/ci.yml
+```
 
-Arquivo: `applications-type/backend-project/.github/workflows/ci.yml`
+2- add the following content to the file `.github/workflows/ci.yml`
 
 ```yaml
-name: Backend Java CI/CD Pipeline
+name: Backend Java CI/CD
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   code-quality:
-    uses: lolmeida/reusable-github-actions/.github/workflows/spotless-check.yml@main
+    uses: lolmeida/github-actions/.github/workflows/spotless-check.yml@main
     with:
       java_version: '21'
-      java_distribution: 'temurin'
       auto_fix: ${{ github.event_name == 'pull_request' }}
       fail_on_error: true
+
   build-and-push:
     needs: code-quality
     if: github.event_name == 'push'
-    uses: lolmeida/reusable-github-actions/.github/workflows/docker-jib-push.yml@main
+    uses: lolmeida/github-actions/.github/workflows/docker-jib-push.yml@main
     with:
       java_version: '21'
-      image_name: my-backend-service
-      maven_profiles: ${{ github.ref_name == 'main' && 'prod' || 'staging' }}
+      image_name: auth-be
+      maven_profiles: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
       skip_tests: false
     secrets:
       DOCKER_HUB_USER: ${{ secrets.DOCKER_HUB_USER }}
       DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
 ```
+---
 
 ### 2. Frontend Project
+1- create file `.github/workflows/ci.yml`
+```bash
+mkdir -p .github/workflows/
+touch .github/workflows/ci.yml
+```
 
-Arquivo: `applications-type/frontend-project/.github/workflows/ci.yml`
-
+2- add the following content to the file `.github/workflows/ci.yml`
 ```yaml
-name: Frontend CI/CD Pipeline
+name: Frontend CI/CD
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      api_base_url:
-        description: 'API Base URL'
-        required: false
-        type: choice
-        options:
-          - 'https://api.production.com'
-          - 'https://api.staging.com'
-          - 'https://api.dev.com'
-        default: 'https://api.production.com'
-      deploy_environment:
-        description: 'Deploy environment'
-        required: false
-        type: choice
-        options:
-          - 'production'
-          - 'staging'
-          - 'development'
-        default: 'staging'
+
 jobs:
-  build-and-push:
-    if: github.event_name == 'push' && contains(fromJson('["main", "develop"]'), github.ref_name)
-    uses: lolmeida/reusable-github-actions/.github/workflows/docker-build-push.yml@main
+  build-and-deploy:
+    uses: lolmeida/github-actions/.github/workflows/docker-build-push.yml@main
     with:
-      image_name: my-frontend-app
+      image_name: auth-fe
       dockerfile_path: ./Dockerfile
       build_context: .
       platforms: linux/amd64,linux/arm64
-      api_base_url: ${{ github.event.inputs.api_base_url || (github.ref_name == 'main' && 'https://api.production.com' || 'https://api.staging.com') }}
+      api_base_url: ${{ github.ref_name == 'main' && 'https://api.production.com' || 'https://api.staging.com' }}
       tag_strategy: ${{ github.ref_name == 'main' && 'latest' || github.ref_name }}
-      push_enabled: true
     secrets:
       DOCKER_HUB_USER: ${{ secrets.DOCKER_HUB_USER }}
       DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
 ```
+---
 
 ### 3. Helm Project
 
