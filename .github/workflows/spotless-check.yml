@@ -43,11 +43,11 @@ on:
         required: false
         type: number
         default: 0
-    maven_goal:
-      description: 'Maven goal'
-      required: false
-      default: 'spotless:check'
-      type: string
+      maven_goal:
+        description: 'Maven goal'
+        required: false
+        default: 'spotless:check'
+        type: string
     outputs:
       spotless_status:
         description: 'Spotless check status'
