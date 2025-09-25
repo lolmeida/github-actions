@@ -32,7 +32,7 @@ on:
         default: true
       api_base_url:
         description: 'API base URL'
-        required: false
+        required: true
         type: string
         default: 'https://apps-be.lolmeida.com'
       auth_endpoint:
