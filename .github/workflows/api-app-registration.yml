@@ -147,6 +147,8 @@ jobs:
             '{username: $username, password: $password}'
           )
           
+            echo "📋 Auth Payload:"$AUTH_PAYLOAD | jq '.'
+          
           # Make authentication request with retry logic
           for attempt in $(seq 1 ${{ inputs.retry_attempts }}); do
             echo "🔄 Authentication attempt $attempt of ${{ inputs.retry_attempts }}"
