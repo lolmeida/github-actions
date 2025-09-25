@@ -1,0 +1,189 @@
+name: Register Application (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        description: 'Application name'
+        required: true
+        type: string
+      app_url:
+        description: 'Application URL'
+        required: true
+        type: string
+      app_description:
+        description: 'Application description'
+        required: true
+        type: string
+      app_icon:
+        description: 'App icon URL (optional)'
+        required: false
+        type: string
+        default: ''
+      is_active:
+        description: 'Is application active?'
+        required: false
+        type: boolean
+        default: true
+      is_enabled:
+        description: 'Is application enabled?'
+        required: false
+        type: boolean
+        default: true
+      dry_run:
+        description: 'Dry run mode'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      API_USERNAME:
+        required: true
+      API_PASSWORD:
+        required: true
+    outputs:
+      status:
+        description: 'Registration status'
+        value: ${{ jobs.register.outputs.status }}
+      app_id:
+        description: 'App ID if registered'
+        value: ${{ jobs.register.outputs.app_id }}
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'Application name'
+        required: true
+        type: string
+      app_url:
+        description: 'Application URL'
+        required: true
+        type: string
+      app_description:
+        description: 'Application description'
+        required: true
+        type: string
+      app_icon:
+        description: 'App icon URL (optional)'
+        required: false
+        type: string
+      is_active:
+        description: 'Is application active?'
+        required: false
+        type: boolean
+        default: true
+      is_enabled:
+        description: 'Is application enabled?'
+        required: false
+        type: boolean
+        default: true
+      dry_run:
+        description: 'Dry run mode'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.register-app.outputs.status }}
+      app_id: ${{ steps.register-app.outputs.app_id }}
+    steps:
+      - name: Register application
+        id: register-app
+        run: |
+          APP_NAME="${{ inputs.app_name || github.event.inputs.app_name }}"
+          APP_URL="${{ inputs.app_url || github.event.inputs.app_url }}"
+          APP_DESCRIPTION="${{ inputs.app_description || github.event.inputs.app_description }}"
+          APP_ICON="${{ inputs.app_icon || github.event.inputs.app_icon }}"
+          IS_ACTIVE="${{ inputs.is_active || github.event.inputs.is_active }}"
+          IS_ENABLED="${{ inputs.is_enabled || github.event.inputs.is_enabled }}"
+          DRY_RUN="${{ inputs.dry_run || github.event.inputs.dry_run }}"
+          
+          echo "Registering application:"
+          echo "Name: $APP_NAME"
+          echo "URL: $APP_URL"
+          echo "Dry run: $DRY_RUN"
+          
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "🔍 DRY RUN MODE - Not actually registering"
+            echo "status=dry-run-success" >> $GITHUB_OUTPUT
+            echo "app_id=dry-run-id" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Authenticate
+          echo "Authenticating..."
+          USERNAME="${{ secrets.API_USERNAME }}"
+          PASSWORD="${{ secrets.API_PASSWORD }}"
+          
+          AUTH_PAYLOAD=$(jq -n \
+            --arg username "$USERNAME" \
+            --arg password "$PASSWORD" \
+            '{username: $username, password: $password}')
+          
+          TOKEN_RESPONSE=$(curl -s -X POST \
+            "https://apps-be.lolmeida.com/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d "$AUTH_PAYLOAD" \
+            --max-time 30 \
+            -w "HTTP_STATUS:%{http_code}")
+          
+          HTTP_STATUS=$(echo "$TOKEN_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+          
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "❌ Authentication failed"
+            echo "status=auth-failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          TOKEN=$(echo "$TOKEN_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//' | jq -r '.token')
+          echo "✅ Authentication successful"
+          
+          # Prepare app data
+          if [[ -z "$APP_ICON" ]]; then
+            APP_NAME_ENCODED=$(echo "$APP_NAME" | sed 's/ /%20/g')
+            APP_ICON="https://placehold.co/600x400/white/gray?text=${APP_NAME_ENCODED}"
+          fi
+          
+          # Register app
+          echo "Registering app..."
+          REGISTER_PAYLOAD=$(jq -n \
+            --arg name "$APP_NAME" \
+            --arg url "$APP_URL" \
+            --arg description "$APP_DESCRIPTION" \
+            --arg icon "$APP_ICON" \
+            --argjson isActive $IS_ACTIVE \
+            --argjson isEnabled $IS_ENABLED \
+            '{name: $name, url: $url, description: $description, icon: $icon, isActive: $isActive, isEnabled: $isEnabled}')
+          
+          REGISTER_RESPONSE=$(curl -s -X POST \
+            "https://apps-be.lolmeida.com/api/apps" \
+            -H 'Accept: application/json' \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d "$REGISTER_PAYLOAD" \
+            --max-time 30 \
+            -w "HTTP_STATUS:%{http_code}")
+          
+          HTTP_STATUS=$(echo "$REGISTER_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+          RESPONSE_BODY=$(echo "$REGISTER_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+          
+          case "$HTTP_STATUS" in
+            200|201)
+              echo "✅ App registered successfully!"
+              APP_ID=$(echo "$RESPONSE_BODY" | jq -r '.id // .app_id // "unknown"' 2>/dev/null || echo "unknown")
+              echo "status=success" >> $GITHUB_OUTPUT
+              echo "app_id=$APP_ID" >> $GITHUB_OUTPUT
+              ;;
+            409)
+              echo "ℹ️ App already exists"
+              echo "status=already-exists" >> $GITHUB_OUTPUT
+              echo "app_id=existing" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "❌ Registration failed with HTTP $HTTP_STATUS"
+              echo "Response: $RESPONSE_BODY"
+              echo "status=failed" >> $GITHUB_OUTPUT
+              exit 1
+              ;;
+          esac

@@ -1,0 +1,147 @@
+# ==============================================
+# WORKFLOW 1: test-api.yml - APENAS TESTA API
+# ==============================================
+
+name: Test API Connection and Credentials (Reusable)
+
+on:
+  workflow_call:
+    secrets:
+      API_USERNAME:
+        required: true
+      API_PASSWORD:
+        required: true
+    outputs:
+      api_ready:
+        description: 'Whether API is ready for registration'
+        value: ${{ jobs.test-api.outputs.api_ready }}
+  workflow_dispatch:
+
+jobs:
+  test-api:
+    runs-on: ubuntu-latest
+    outputs:
+      api_ready: ${{ steps.final-check.outputs.api_ready }}
+    steps:
+      - name: Test API connectivity
+        id: connectivity
+        run: |
+          echo "Testing API base URL..."
+          if curl -f -s --max-time 10 "https://apps-be.lolmeida.com" >/dev/null; then
+            echo "✅ Base URL is reachable"
+            echo "base_url_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Base URL is not reachable"
+            echo "base_url_ok=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "Testing auth endpoint..."
+          AUTH_RESPONSE=$(curl -s -X POST \
+            "https://apps-be.lolmeida.com/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"test","password":"invalid"}' \
+            -w "HTTP_STATUS:%{http_code}")
+          
+          if echo "$AUTH_RESPONSE" | grep -q "HTTP_STATUS:40[13]"; then
+            echo "✅ Auth endpoint working"
+            echo "auth_endpoint_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Auth endpoint not working"
+            echo "auth_endpoint_ok=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "Testing apps endpoint..."
+          APPS_RESPONSE=$(curl -s -X GET \
+            "https://apps-be.lolmeida.com/api/apps" \
+            -w "HTTP_STATUS:%{http_code}")
+          
+          if echo "$APPS_RESPONSE" | grep -q "HTTP_STATUS:[0-9]"; then
+            echo "✅ Apps endpoint responding"
+            echo "apps_endpoint_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Apps endpoint not responding"
+            echo "apps_endpoint_ok=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Test secrets
+        id: secrets
+        run: |
+          echo "Testing secrets configuration..."
+          
+          SECRETS_OK=true
+          
+          if [[ -z "${{ secrets.API_USERNAME }}" ]]; then
+            echo "❌ API_USERNAME secret not configured"
+            SECRETS_OK=false
+          else
+            echo "✅ API_USERNAME configured"
+          fi
+          
+          if [[ -z "${{ secrets.API_PASSWORD }}" ]]; then
+            echo "❌ API_PASSWORD secret not configured"
+            SECRETS_OK=false
+          else
+            echo "✅ API_PASSWORD configured"
+          fi
+          
+          echo "secrets_ok=$SECRETS_OK" >> $GITHUB_OUTPUT
+
+      - name: Test authentication
+        id: auth-test
+        run: |
+          echo "Testing real authentication..."
+          
+          if [[ "${{ steps.secrets.outputs.secrets_ok }}" != "true" ]]; then
+            echo "⚠️ Skipping auth test - secrets not available"
+            echo "auth_test_ok=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          USERNAME="${{ secrets.API_USERNAME }}"
+          PASSWORD="${{ secrets.API_PASSWORD }}"
+          
+          AUTH_PAYLOAD=$(jq -n \
+            --arg username "$USERNAME" \
+            --arg password "$PASSWORD" \
+            '{username: $username, password: $password}')
+          
+          AUTH_RESPONSE=$(curl -s -X POST \
+            "https://apps-be.lolmeida.com/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d "$AUTH_PAYLOAD" \
+            --max-time 30 \
+            -w "HTTP_STATUS:%{http_code}")
+          
+          HTTP_STATUS=$(echo "$AUTH_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+          
+          if [[ "$HTTP_STATUS" == "200" ]]; then
+            echo "✅ Authentication successful"
+            echo "auth_test_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Authentication failed"
+            echo "auth_test_ok=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Final check
+        id: final-check
+        run: |
+          echo "API Test Summary:"
+          echo "================"
+          echo "Base URL: ${{ steps.connectivity.outputs.base_url_ok }}"
+          echo "Auth Endpoint: ${{ steps.connectivity.outputs.auth_endpoint_ok }}"
+          echo "Apps Endpoint: ${{ steps.connectivity.outputs.apps_endpoint_ok }}"
+          echo "Secrets: ${{ steps.secrets.outputs.secrets_ok }}"
+          echo "Authentication: ${{ steps.auth-test.outputs.auth_test_ok }}"
+          
+          if [[ "${{ steps.connectivity.outputs.base_url_ok }}" == "true" && \
+                "${{ steps.connectivity.outputs.auth_endpoint_ok }}" == "true" && \
+                "${{ steps.secrets.outputs.secrets_ok }}" == "true" && \
+                "${{ steps.auth-test.outputs.auth_test_ok }}" == "true" ]]; then
+            echo ""
+            echo "🎉 ALL TESTS PASSED - API is ready!"
+            echo "api_ready=true" >> $GITHUB_OUTPUT
+          else
+            echo ""
+            echo "❌ Some tests failed - API not ready"
+            echo "api_ready=false" >> $GITHUB_OUTPUT
+          fi
