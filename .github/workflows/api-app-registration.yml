@@ -13,6 +13,10 @@ on:
         required: true
         type: string
         default: 'https://my-app.lolmeida.com'
+      api_base_url:
+        description: 'Base URL da API'
+        required: true
+        type: string
       app_description:
         description: 'Application description'
         required: true
