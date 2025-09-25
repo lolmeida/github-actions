@@ -1,51 +1,31 @@
-name: Complete App Registration (Test + Register)
-
 on:
   workflow_call:
     inputs:
       app_name:
-        description: 'Application name'
+        description: 'Nome da aplicação'
         required: true
         type: string
-        default: 'My Test App'
-      app_url:
-        description: 'Application URL'
-        required: true
-        type: string
-        default: 'https://my-app.lolmeida.com'
       api_base_url:
         description: 'Base URL da API'
         required: true
         type: string
-      app_description:
-        description: 'Application description'
+      app_url:
+        description: 'Callback / redirect URL'
         required: true
         type: string
-        default: 'Test application'
-      app_icon:
-        description: 'App icon URL (optional)'
+      app_description:
+        description: 'Descrição da aplicação'
         required: false
         type: string
-      is_active:
-        description: 'Is application active?'
-        required: false
-        type: boolean
-        default: true
-      is_enabled:
-        description: 'Is application enabled?'
-        required: false
-        type: boolean
-        default: true
       dry_run:
-        description: 'Dry run mode'
+        description: 'Se true, apenas simula o registo'
         required: false
-        type: boolean
-        default: true
-      skip_tests:
-        description: 'Skip API tests (not recommended)'
-        required: false
-        type: boolean
         default: false
+        type: boolean
+      image_name:
+        description: 'Nome da imagem Docker gerada no build-and-push'
+        required: false
+        type: string
     secrets:
       API_USERNAME:
         required: true
@@ -53,81 +33,24 @@ on:
         required: true
 
 jobs:
-  # Stage 1: Test API (unless skipped)
-  test-api:
-    if: ${{ !inputs.skip_tests }}
-    uses: ./.github/workflows/test-api.yml
-    secrets:
-      API_USERNAME: ${{ secrets.API_USERNAME }}
-      API_PASSWORD: ${{ secrets.API_PASSWORD }}
-
-  # Stage 2: Register app (only if tests passed or were skipped)
-  register-app:
-    needs: test-api
-    if: always() && (inputs.skip_tests || needs.test-api.outputs.api_ready == 'true')
-    uses: ./.github/workflows/register-app.yml
-    with:
-      app_name: ${{ inputs.app_name }}
-      app_url: ${{ inputs.app_url }}
-      app_description: ${{ inputs.app_description }}
-      app_icon: ${{ inputs.app_icon }}
-      is_active: ${{ inputs.is_active }}
-      is_enabled: ${{ inputs.is_enabled }}
-      dry_run: ${{ inputs.dry_run }}
-    secrets:
-      API_USERNAME: ${{ secrets.API_USERNAME }}
-      API_PASSWORD: ${{ secrets.API_PASSWORD }}
-
-  # Stage 3: Show results
-  show-results:
-    needs: [test-api, register-app]
-    if: always()
+  register:
     runs-on: ubuntu-latest
     steps:
-      - name: Show complete results
+      - name: Register app via API
         run: |
-          echo "Complete Registration Results"
-          echo "============================="
-          
-          # Test results
-          if [[ "${{ inputs.skip_tests }}" == "true" ]]; then
-            echo "🔄 API tests: SKIPPED"
-          elif [[ "${{ needs.test-api.result }}" == "success" ]]; then
-            if [[ "${{ needs.test-api.outputs.api_ready }}" == "true" ]]; then
-              echo "✅ API tests: PASSED"
-            else
-              echo "⚠️ API tests: Some issues found"
-            fi
-          else
-            echo "❌ API tests: FAILED"
-          fi
-          
-          # Registration results
-          if [[ "${{ needs.register-app.result }}" == "success" ]]; then
-            echo "📝 Registration: ${{ needs.register-app.outputs.status }}"
-            echo "🆔 App ID: ${{ needs.register-app.outputs.app_id }}"
-          
-            case "${{ needs.register-app.outputs.status }}" in
-              "success")
-                echo "🎉 App successfully registered!"
-                ;;
-              "already-exists")
-                echo "ℹ️ App already exists"
-                ;;
-              "dry-run-success")
-                echo "🔍 Dry run completed"
-                ;;
-            esac
-          elif [[ "${{ needs.register-app.result }}" == "skipped" ]]; then
-            echo "⏭️ Registration: SKIPPED (tests failed)"
-          else
-            echo "❌ Registration: FAILED"
-          fi
-          
-          echo ""
-          echo "Summary:"
-          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
-            echo "This was a dry run - no registration was made"
-          else
-            echo "Registration process completed"
-          fi
+          echo "App: ${{ inputs.app_name }}"
+          echo "Base URL: ${{ inputs.api_base_url }}"
+          echo "App URL: ${{ inputs.app_url }}"
+          echo "Description: ${{ inputs.app_description }}"
+          echo "Dry run: ${{ inputs.dry_run }}"
+          echo "Image: ${{ inputs.image_name }}"
+          curl -u "${{ secrets.API_USERNAME }}:${{ secrets.API_PASSWORD }}" \
+            -X POST "${{ inputs.api_base_url }}/register" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"name\": \"${{ inputs.app_name }}\",
+              \"url\": \"${{ inputs.app_url }}\",
+              \"description\": \"${{ inputs.app_description }}\",
+              \"image\": \"${{ inputs.image_name }}\",
+              \"dryRun\": \"${{ inputs.dry_run }}\"
+            }"
