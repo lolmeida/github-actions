@@ -1,121 +1,337 @@
-name: Add App to API
+name: Add App to API Registry (Reusable)
+
 on:
   workflow_call:
     inputs:
       app_name:
         description: 'Application name'
         required: true
-        default: 'ArgoCD'
         type: string
       app_url:
         description: 'Application URL'
         required: true
-        default: 'https://argo-cd.lolmeida.com'
         type: string
       app_description:
         description: 'Application description'
         required: true
-        default: 'Declarative GitOps CD for Kubernetes.'
         type: string
       app_icon:
         description: 'Icon URL'
         required: false
-        default: 'https://placehold.co/600x400/white/gray?text=DOMO'
         type: string
+        default: ''
       is_active:
         description: 'Is the application active?'
         required: false
-        default: true
         type: boolean
+        default: true
       is_enabled:
         description: 'Is the application enabled?'
         required: false
-        default: true
         type: boolean
-      api_username:
-        description: 'API Username'
-        required: true
-        default: 'test'
+        default: true
+      api_base_url:
+        description: 'API base URL'
+        required: false
         type: string
-      api_password:
-        description: 'API Password'
-        required: true
-        default: 'test1234'
+        default: 'https://apps-be.lolmeida.com'
+      auth_endpoint:
+        description: 'Authentication endpoint path'
+        required: false
         type: string
+        default: '/auth/login'
+      apps_endpoint:
+        description: 'Apps endpoint path'
+        required: false
+        type: string
+        default: '/api/apps'
+      timeout_seconds:
+        description: 'Request timeout in seconds'
+        required: false
+        type: number
+        default: 30
+      retry_attempts:
+        description: 'Number of retry attempts'
+        required: false
+        type: number
+        default: 3
+      dry_run:
+        description: 'Perform a dry-run (validate but do not post)'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      API_USERNAME:
+        required: true
+      API_PASSWORD:
+        required: true
+    outputs:
+      app_id:
+        description: 'ID of the created app'
+        value: ${{ jobs.add-app.outputs.app_id }}
+      status:
+        description: 'Registration status'
+        value: ${{ jobs.add-app.outputs.status }}
 
 jobs:
   add-app:
     runs-on: ubuntu-latest
+    outputs:
+      app_id: ${{ steps.register-app.outputs.app_id }}
+      status: ${{ steps.register-app.outputs.status }}
+
     steps:
-      - name: Get Bearer Token
-        id: get_token
-        env:
-          API_USERNAME: ${{ github.event.inputs.api_username }}
-          API_PASSWORD: ${{ github.event.inputs.api_password }}
+      - name: Validate inputs
         run: |
-          TOKEN_RESPONSE=$(curl -s -X POST \
-            'http://localhost:8080/auth/login' \
-            -H 'accept: */*' \
-            -H 'Content-Type: application/json' \
-            -d '{"username": "'$API_USERNAME'", "password": "'$API_PASSWORD'"}')
-          echo "Token response: $TOKEN_RESPONSE"
-          TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r .token)
-          if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
-            echo "Failed to get token" >&2
+          echo "🔍 Validating inputs..."
+          
+          # Validate required inputs
+          if [[ -z "${{ inputs.app_name }}" ]]; then
+            echo "❌ app_name is required"
             exit 1
           fi
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+          
+          if [[ -z "${{ inputs.app_url }}" ]]; then
+            echo "❌ app_url is required"
+            exit 1
+          fi
+          
+          if [[ -z "${{ inputs.app_description }}" ]]; then
+            echo "❌ app_description is required"
+            exit 1
+          fi
+          
+          # Validate URL format
+          if ! echo "${{ inputs.app_url }}" | grep -E '^https?://'; then
+            echo "❌ app_url must start with http:// or https://"
+            exit 1
+          fi
+          
+          echo "✅ Input validation passed"
+          echo "📋 App Details:"
+          echo "   Name: ${{ inputs.app_name }}"
+          echo "   URL: ${{ inputs.app_url }}"
+          echo "   Description: ${{ inputs.app_description }}"
+          echo "   Active: ${{ inputs.is_active }}"
+          echo "   Enabled: ${{ inputs.is_enabled }}"
 
-      - name: Add App via API
-        env:
-          APP_NAME: ${{ github.event.inputs.app_name }}
-          APP_URL: ${{ github.event.inputs.app_url }}
-          APP_DESCRIPTION: ${{ github.event.inputs.app_description }}
-          APP_ICON: ${{ github.event.inputs.app_icon }}
-          IS_ACTIVE: ${{ github.event.inputs.is_active }}
-          IS_ENABLED: ${{ github.event.inputs.is_enabled }}
-          API_BEARER_TOKEN: ${{ steps.get_token.outputs.token }}
+      - name: Prepare app icon
+        id: prepare-icon
         run: |
-          # Set defaults for optional fields if not provided
-          APP_ICON_VALUE="$APP_ICON"
-          if [ -z "$APP_ICON_VALUE" ]; then
-            APP_ICON_VALUE="https://placehold.co/600x400/white/gray?text=$APP_NAME"
+          ICON_URL="${{ inputs.app_icon }}"
+          
+          # Generate placeholder icon if not provided
+          if [[ -z "$ICON_URL" ]]; then
+            # URL encode app name for placeholder
+            APP_NAME_ENCODED=$(echo "${{ inputs.app_name }}" | sed 's/ /%20/g')
+            ICON_URL="https://placehold.co/600x400/white/gray?text=${APP_NAME_ENCODED}"
+            echo "📷 Generated placeholder icon: $ICON_URL"
+          else
+            echo "📷 Using provided icon: $ICON_URL"
           fi
-          IS_ACTIVE_VALUE="$IS_ACTIVE"
-          if [ -z "$IS_ACTIVE_VALUE" ]; then
-            IS_ACTIVE_VALUE="true"
-          fi
-          IS_ENABLED_VALUE="$IS_ENABLED"
-          if [ -z "$IS_ENABLED_VALUE" ]; then
-            IS_ENABLED_VALUE="true"
-          fi
+          
+          echo "icon_url=$ICON_URL" >> $GITHUB_OUTPUT
 
+      - name: Get Bearer Token
+        id: get-token
+        run: |
+          echo "🔐 Authenticating with API..."
+          
+          AUTH_URL="${{ inputs.api_base_url }}${{ inputs.auth_endpoint }}"
+          echo "Authentication URL: $AUTH_URL"
+          
+          # Prepare JSON payload for authentication
+          AUTH_PAYLOAD=$(jq -n \
+            --arg username "${{ secrets.API_USERNAME }}" \
+            --arg password "${{ secrets.API_PASSWORD }}" \
+            '{username: $username, password: $password}'
+          )
+          
+          # Make authentication request with retry logic
+          for attempt in $(seq 1 ${{ inputs.retry_attempts }}); do
+            echo "🔄 Authentication attempt $attempt of ${{ inputs.retry_attempts }}"
+          
+            TOKEN_RESPONSE=$(curl -s -X POST \
+              "$AUTH_URL" \
+              -H 'Accept: application/json' \
+              -H 'Content-Type: application/json' \
+              -d "$AUTH_PAYLOAD" \
+              --max-time ${{ inputs.timeout_seconds }} \
+              -w "HTTP_STATUS:%{http_code}" || echo "CURL_FAILED")
+          
+            if [[ "$TOKEN_RESPONSE" == "CURL_FAILED" ]]; then
+              echo "⚠️  Authentication request failed (attempt $attempt)"
+              if [[ $attempt -eq ${{ inputs.retry_attempts }} ]]; then
+                echo "❌ All authentication attempts failed"
+                exit 1
+              fi
+              sleep 2
+              continue
+            fi
+          
+            # Extract HTTP status
+            HTTP_STATUS=$(echo "$TOKEN_RESPONSE" | sed -n 's/.*HTTP_STATUS:\([0-9]*\)$/\1/p')
+            RESPONSE_BODY=$(echo "$TOKEN_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+          
+            if [[ "$HTTP_STATUS" == "200" ]]; then
+              TOKEN=$(echo "$RESPONSE_BODY" | jq -r '.token // empty')
+          
+              if [[ -n "$TOKEN" && "$TOKEN" != "null" ]]; then
+                echo "✅ Authentication successful"
+                echo "::add-mask::$TOKEN"
+                echo "token=$TOKEN" >> $GITHUB_OUTPUT
+                break
+              else
+                echo "❌ Invalid token in response"
+                echo "Response: $RESPONSE_BODY"
+                exit 1
+              fi
+            else
+              echo "❌ Authentication failed with HTTP $HTTP_STATUS"
+              echo "Response: $RESPONSE_BODY"
+              if [[ $attempt -eq ${{ inputs.retry_attempts }} ]]; then
+                exit 1
+              fi
+              sleep 2
+            fi
+          done
+
+      - name: Register App
+        id: register-app
+        run: |
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            echo "🔍 DRY-RUN MODE - Would register app but not actually posting"
+          else
+            echo "📝 Registering application with API..."
+          fi
+          
+          APPS_URL="${{ inputs.api_base_url }}${{ inputs.apps_endpoint }}"
+          echo "Apps API URL: $APPS_URL"
+          
           # Prepare JSON payload
           JSON_PAYLOAD=$(jq -n \
-            --arg name "$APP_NAME" \
-            --arg url "$APP_URL" \
-            --arg description "$APP_DESCRIPTION" \
-            --arg icon "$APP_ICON_VALUE" \
-            --argjson isActive "$IS_ACTIVE_VALUE" \
-            --argjson isEnabled "$IS_ENABLED_VALUE" \
-            '{name: $name, url: $url, description: $description, icon: $icon, isActive: $isActive, isEnabled: $isEnabled}'
+            --arg name "${{ inputs.app_name }}" \
+            --arg url "${{ inputs.app_url }}" \
+            --arg description "${{ inputs.app_description }}" \
+            --arg icon "${{ steps.prepare-icon.outputs.icon_url }}" \
+            --argjson isActive ${{ inputs.is_active }} \
+            --argjson isEnabled ${{ inputs.is_enabled }} \
+            '{
+              name: $name,
+              url: $url,
+              description: $description,
+              icon: $icon,
+              isActive: $isActive,
+              isEnabled: $isEnabled
+            }'
           )
-
-          response=$(curl -X 'POST' \
-            'https://apps-be.lolmeida.com/api/apps' \
-            -H 'accept: application/json' \
-            -H "Authorization: Bearer $API_BEARER_TOKEN" \
-            -H 'Content-Type: application/json' \
-            -d "$JSON_PAYLOAD" \
-            -w "HTTP_STATUS:%{http_code}")
-
-          echo "API Response: $response"
-
-          # Check if the response was successful
-          if [[ $response == *"HTTP_STATUS:200"* ]] || [[ $response == *"HTTP_STATUS:201"* ]]; then
-            echo "✅ App added successfully!"
-          else
-            echo "❌ Error adding app"
-            exit 1
+          
+          echo "📋 Payload:"
+          echo "$JSON_PAYLOAD" | jq '.'
+          
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            echo "🔍 DRY-RUN: Would send the above payload to $APPS_URL"
+            echo "status=dry-run-success" >> $GITHUB_OUTPUT
+            echo "app_id=dry-run-mock-id" >> $GITHUB_OUTPUT
+            exit 0
           fi
+          
+          # Make API request with retry logic
+          for attempt in $(seq 1 ${{ inputs.retry_attempts }}); do
+            echo "🔄 Registration attempt $attempt of ${{ inputs.retry_attempts }}"
+          
+            RESPONSE=$(curl -s -X POST \
+              "$APPS_URL" \
+              -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${{ steps.get-token.outputs.token }}" \
+              -H 'Content-Type: application/json' \
+              -d "$JSON_PAYLOAD" \
+              --max-time ${{ inputs.timeout_seconds }} \
+              -w "HTTP_STATUS:%{http_code}" || echo "CURL_FAILED")
+          
+            if [[ "$RESPONSE" == "CURL_FAILED" ]]; then
+              echo "⚠️  Registration request failed (attempt $attempt)"
+              if [[ $attempt -eq ${{ inputs.retry_attempts }} ]]; then
+                echo "❌ All registration attempts failed"
+                echo "status=failed" >> $GITHUB_OUTPUT
+                exit 1
+              fi
+              sleep 2
+              continue
+            fi
+          
+            # Extract HTTP status and response body
+            HTTP_STATUS=$(echo "$RESPONSE" | sed -n 's/.*HTTP_STATUS:\([0-9]*\)$/\1/p')
+            RESPONSE_BODY=$(echo "$RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+          
+            echo "📊 HTTP Status: $HTTP_STATUS"
+            echo "📄 Response Body: $RESPONSE_BODY"
+          
+            if [[ "$HTTP_STATUS" == "200" || "$HTTP_STATUS" == "201" ]]; then
+              echo "✅ App registered successfully!"
+          
+              # Try to extract app ID from response
+              APP_ID=$(echo "$RESPONSE_BODY" | jq -r '.id // .app_id // empty' 2>/dev/null || echo "")
+          
+              if [[ -n "$APP_ID" && "$APP_ID" != "null" ]]; then
+                echo "🆔 App ID: $APP_ID"
+                echo "app_id=$APP_ID" >> $GITHUB_OUTPUT
+              else
+                echo "⚠️  App registered but ID not found in response"
+                echo "app_id=unknown" >> $GITHUB_OUTPUT
+              fi
+          
+              echo "status=success" >> $GITHUB_OUTPUT
+              break
+          
+            elif [[ "$HTTP_STATUS" == "409" ]]; then
+              echo "⚠️  App already exists (HTTP 409)"
+              echo "status=already-exists" >> $GITHUB_OUTPUT
+              echo "app_id=existing" >> $GITHUB_OUTPUT
+              break
+          
+            elif [[ "$HTTP_STATUS" == "401" || "$HTTP_STATUS" == "403" ]]; then
+              echo "❌ Authentication/Authorization failed (HTTP $HTTP_STATUS)"
+              echo "status=auth-failed" >> $GITHUB_OUTPUT
+              exit 1
+          
+            else
+              echo "❌ Registration failed with HTTP $HTTP_STATUS"
+              echo "Response: $RESPONSE_BODY"
+          
+              if [[ $attempt -eq ${{ inputs.retry_attempts }} ]]; then
+                echo "status=failed" >> $GITHUB_OUTPUT
+                exit 1
+              fi
+              sleep 2
+            fi
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "📋 Registration Summary"
+          echo "======================="
+          echo "App Name: ${{ inputs.app_name }}"
+          echo "App URL: ${{ inputs.app_url }}"
+          echo "Status: ${{ steps.register-app.outputs.status }}"
+          echo "App ID: ${{ steps.register-app.outputs.app_id }}"
+          echo "Dry Run: ${{ inputs.dry_run }}"
+          
+          case "${{ steps.register-app.outputs.status }}" in
+            "success")
+              echo "🎉 App successfully registered!"
+              ;;
+            "already-exists")
+              echo "ℹ️  App already exists in the registry"
+              ;;
+            "dry-run-success")
+              echo "🔍 Dry run completed successfully"
+              ;;
+            "auth-failed")
+              echo "❌ Authentication failed"
+              ;;
+            "failed"|*)
+              echo "❌ Registration failed"
+              ;;
+          esac
