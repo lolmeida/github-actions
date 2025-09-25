@@ -31,7 +31,7 @@ jobs:
   create-app-entry:
     needs: build-and-push
     if: github.event_name == 'push'
-    uses: lolmeida/github-actions/.github/workflows/post-app-to-db.yml@main
+    uses: lolmeida/github-actions/.github/workflows/api-app-registration.yml@main
     with:
       app_name: My Backend Service
       app_url: https://my-backend-service.example.com
