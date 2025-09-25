@@ -42,6 +42,11 @@ on:
         required: false
         type: boolean
         default: false
+    secrets:
+      API_USERNAME:
+        required: true
+      API_PASSWORD:
+        required: true
 
 jobs:
   # Stage 1: Test API (unless skipped)
