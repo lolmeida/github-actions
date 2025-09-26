@@ -160,13 +160,12 @@ jobs:
           echo "User info: $USER_RESPONSE_BODY"
           
           if [[ "$USER_HTTP_STATUS" == "200" ]]; then
-            GROUPS=$(echo "$USER_RESPONSE_BODY" | jq -r '.groups[]?' 2>/dev/null | tr '\n' ' ')
-            echo "User groups: [$GROUPS]"
-          
-            if echo "$GROUPS" | grep -q "ADMIN"; then
+            # Verificar se a resposta contém ADMIN diretamente na string
+            if echo "$USER_RESPONSE_BODY" | grep -q '"ADMIN"'; then
               echo "✅ User has ADMIN permissions"
             else
-              echo "❌ User does not have ADMIN permissions: $GROUPS"
+              echo "❌ User does not have ADMIN permissions"
+              echo "Response: $USER_RESPONSE_BODY"
               exit 1
             fi
           else
