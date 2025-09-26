@@ -54,15 +54,19 @@ jobs:
             --arg username "$USERNAME" \
             --arg password "$PASSWORD" \
             '{username: $username, password: $password}')
+          echo "Payload: $AUTH_PAYLOAD"
 
           TOKEN_RESPONSE=$(curl -s -X POST "$AUTH_URL" \
             -H 'Content-Type: application/json' \
             -d "$AUTH_PAYLOAD" \
             --max-time 30 \
             -w "HTTP_STATUS:%{http_code}")
+          echo "Response: $TOKEN_RESPONSE"
 
           HTTP_STATUS=$(echo "$TOKEN_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+          echo "HTTP Status: $HTTP_STATUS"
           RESPONSE_BODY=$(echo "$TOKEN_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+          echo "Response Body: $RESPONSE_BODY"
 
           if [[ "$HTTP_STATUS" != "200" ]]; then
             echo "❌ Authentication failed (HTTP $HTTP_STATUS)"
