@@ -137,7 +137,8 @@ jobs:
             -w "HTTP_STATUS:%{http_code}")
 
           HTTP_STATUS=$(echo "$TOKEN_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
-
+          echo "Received HTTP status: $HTTP_STATUS"
+          
           if [[ "$HTTP_STATUS" != "200" ]]; then
             echo "❌ Authentication failed"
             echo "status=auth-failed" >> $GITHUB_OUTPUT
@@ -145,6 +146,7 @@ jobs:
           fi
 
           TOKEN=$(echo "$TOKEN_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//' | jq -r '.token')
+          echo "Received token: $TOKEN"
           echo "✅ Authentication successful"
 
           # Default icon if empty
@@ -161,16 +163,20 @@ jobs:
             --argjson isActive $IS_ACTIVE \
             --argjson isEnabled $IS_ENABLED \
             '{name: $name, url: $url, description: $description, icon: $icon, isActive: $isActive, isEnabled: $isEnabled}')
-
+          echo "Register payload: $REGISTER_PAYLOAD"
+          
           REGISTER_RESPONSE=$(curl -s -X POST "https://apps-be.lolmeida.com/api/apps" \
             -H "Authorization: Bearer $TOKEN" \
             -H 'Content-Type: application/json' \
             -d "$REGISTER_PAYLOAD" \
             --max-time 30 \
             -w "HTTP_STATUS:%{http_code}")
+          echo "Register response: $REGISTER_RESPONSE"
 
           HTTP_STATUS=$(echo "$REGISTER_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+          echo "Received HTTP status: $HTTP_STATUS"
           RESPONSE_BODY=$(echo "$REGISTER_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+          echo "Response body: $RESPONSE_BODY"
 
           case "$HTTP_STATUS" in
             200|201)
