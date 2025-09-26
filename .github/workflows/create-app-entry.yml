@@ -78,7 +78,9 @@ jobs:
           fi
 
           echo "✅ Authentication successful"
+          echo "token XXX=$TOKEN"
           echo "token=$TOKEN" >> $GITHUB_OUTPUT
+          
 
 
       - name: Register Application
