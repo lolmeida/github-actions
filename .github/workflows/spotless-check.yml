@@ -58,6 +58,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       status: ${{ steps.spotless-check.outputs.status }}
+      java_version: ${{ inputs.java_version }}
+      java_distribution: ${{ inputs.java_distribution }}
     
     permissions:
       contents: write
