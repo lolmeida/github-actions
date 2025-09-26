@@ -27,7 +27,7 @@ jobs:
         id: connectivity
         run: |
           echo "Testing API base URL..."
-          if curl -f -s --max-time 10 "https://auth-be.lolmeida.com/q/health" >/dev/null; then
+          if curl -f -s --max-time 10 "https://k8s-be.lolmeida.com/q/health" >/dev/null; then
             echo "✅ Base URL is reachable"
             echo "base_url_ok=true" >> $GITHUB_OUTPUT
           else
@@ -37,9 +37,9 @@ jobs:
           
           echo "Testing auth endpoint..."
           AUTH_RESPONSE=$(curl -s -X POST \
-            "https://apps-be.lolmeida.com/auth/login" \
+            "https://k8s-be.lolmeida.com/auth/login" \
             -H 'Content-Type: application/json' \
-            -d '{"username":"test","password":"invalid"}' \
+            -d '{"username":"test","password":"test1234"}' \
             -w "HTTP_STATUS:%{http_code}")
           
           if echo "$AUTH_RESPONSE" | grep -q "HTTP_STATUS:40[13]"; then
@@ -52,7 +52,7 @@ jobs:
           
           echo "Testing apps endpoint..."
           APPS_RESPONSE=$(curl -s -X GET \
-            "https://apps-be.lolmeida.com/api/apps" \
+            "https://k8s-be.lolmeida.com/api/apps" \
             -w "HTTP_STATUS:%{http_code}")
           
           if echo "$APPS_RESPONSE" | grep -q "HTTP_STATUS:[0-9]"; then
@@ -106,7 +106,7 @@ jobs:
             '{username: $username, password: $password}')
           
           AUTH_RESPONSE=$(curl -s -X POST \
-            "https://apps-be.lolmeida.com/auth/login" \
+            "https://auth-be.lolmeida.com/auth/login" \
             -H 'Content-Type: application/json' \
             -d "$AUTH_PAYLOAD" \
             --max-time 30 \
