@@ -44,33 +44,49 @@ on:
       app_name:
         required: true
         type: string
+        description:
+          'Name of the application to register'
       app_ingress:
         required: true
         type: string
         default: 'https://auth.lolmeida.com'
+        description:
+          'Public URL where the application is accessible'
       app_description:
         required: true
         type: string
+        description:
+          'Description of the application'
       app_icon:
         required: false
         type: string
         default: ''
+        description:
+          'URL of the application icon (optional)'
       is_active:
         required: false
         type: boolean
         default: true
+        description:
+          'Whether the application is active'
       is_enabled:
         required: false
         type: boolean
         default: true
+        description:
+          'Whether the application is enabled'
       auth_base_url:
         required: false
         type: string
         default: 'https://apps-be.lolmeida.com/auth/login'
+        description:
+          'Authentication endpoint URL'
       dry_run:
         required: false
         type: boolean
         default: false
+        description:
+          'If true, only simulates the registration'
 
 jobs:
   register:
