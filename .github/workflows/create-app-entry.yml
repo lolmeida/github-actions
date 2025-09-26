@@ -52,10 +52,6 @@ on:
         required: true
         type: string
         default: 'https://auth.lolmeida.com'
-      auth_base_url:
-        required: false
-        type: string
-        default: 'https://apps-be.lolmeida.com/auth/login'
       app_description:
         required: true
         type: string
@@ -75,6 +71,10 @@ on:
         required: false
         type: boolean
         default: true
+      auth_base_url:
+        required: false
+        type: string
+        default: 'https://apps-be.lolmeida.com/auth/login'
 
 jobs:
   register:
@@ -83,30 +83,44 @@ jobs:
       status: ${{ steps.register-app.outputs.status }}
       app_id: ${{ steps.register-app.outputs.app_id }}
     steps:
-      - name: Register application
-        id: register-app
+      - name: Resolve inputs
+        id: resolve
         run: |
-          # Resolve inputs depending on trigger
+          # Workflow Call vs Workflow Dispatch fallback
           APP_NAME="${{ inputs.app_name || github.event.inputs.app_name }}"
           APP_URL="${{ inputs.app_ingress || github.event.inputs.app_ingress }}"
           APP_DESCRIPTION="${{ inputs.app_description || github.event.inputs.app_description }}"
           APP_ICON="${{ inputs.app_icon || github.event.inputs.app_icon }}"
-          IS_ACTIVE="${{ inputs.is_active || github.event.inputs.is_active }}"
-          IS_ENABLED="${{ inputs.is_enabled || github.event.inputs.is_enabled }}"
-          DRY_RUN="${{ inputs.dry_run || github.event.inputs.dry_run }}"
-          AUTH_URL="${{ inputs.auth_base_url || github.event.inputs.auth_base_url }}"
+          IS_ACTIVE="${{ inputs.is_active || github.event.inputs.is_active || 'true' }}"
+          IS_ENABLED="${{ inputs.is_enabled || github.event.inputs.is_enabled || 'true' }}"
+          DRY_RUN="${{ inputs.dry_run || github.event.inputs.dry_run || 'false' }}"
+          AUTH_URL="${{ inputs.auth_base_url || github.event.inputs.auth_base_url || 'https://apps-be.lolmeida.com/auth/login' }}"
 
-          # Normalize booleans (always lowercase)
+          # Normalizar valores booleanos
           IS_ACTIVE=$(echo "$IS_ACTIVE" | tr '[:upper:]' '[:lower:]')
           IS_ENABLED=$(echo "$IS_ENABLED" | tr '[:upper:]' '[:lower:]')
           DRY_RUN=$(echo "$DRY_RUN" | tr '[:upper:]' '[:lower:]')
 
+          # Exportar para próximos passos
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
+          echo "APP_URL=$APP_URL" >> $GITHUB_ENV
+          echo "APP_DESCRIPTION=$APP_DESCRIPTION" >> $GITHUB_ENV
+          echo "APP_ICON=$APP_ICON" >> $GITHUB_ENV
+          echo "IS_ACTIVE=$IS_ACTIVE" >> $GITHUB_ENV
+          echo "IS_ENABLED=$IS_ENABLED" >> $GITHUB_ENV
+          echo "DRY_RUN=$DRY_RUN" >> $GITHUB_ENV
+          echo "AUTH_URL=$AUTH_URL" >> $GITHUB_ENV
+
+      - name: Register application
+        id: register-app
+        run: |
           echo "Registering application:"
           echo "Name: $APP_NAME"
           echo "URL: $APP_URL"
           echo "Dry run: $DRY_RUN"
 
           if [[ "$DRY_RUN" == "true" ]]; then
+            echo "🔍 DRY RUN MODE - Not actually registering"
             echo "status=dry-run-success" >> $GITHUB_OUTPUT
             echo "app_id=dry-run-id" >> $GITHUB_OUTPUT
             exit 0
@@ -116,22 +130,28 @@ jobs:
           USERNAME="${{ secrets.API_USERNAME }}"
           PASSWORD="${{ secrets.API_PASSWORD }}"
 
-          AUTH_PAYLOAD=$(jq -n --arg username "$USERNAME" --arg password "$PASSWORD" \
+          AUTH_PAYLOAD=$(jq -n \
+            --arg username "$USERNAME" \
+            --arg password "$PASSWORD" \
             '{username: $username, password: $password}')
 
+          echo "Authenticating against $AUTH_URL"
           TOKEN_RESPONSE=$(curl -s -X POST "$AUTH_URL" \
             -H 'Content-Type: application/json' \
             -d "$AUTH_PAYLOAD" \
-            --max-time 30 -w "HTTP_STATUS:%{http_code}")
+            --max-time 30 \
+            -w "HTTP_STATUS:%{http_code}")
 
           HTTP_STATUS=$(echo "$TOKEN_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
 
           if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "❌ Authentication failed"
             echo "status=auth-failed" >> $GITHUB_OUTPUT
             exit 1
           fi
 
           TOKEN=$(echo "$TOKEN_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//' | jq -r '.token')
+          echo "✅ Authentication successful"
 
           # Default icon if empty
           if [[ -z "$APP_ICON" ]]; then
@@ -152,7 +172,8 @@ jobs:
             -H "Authorization: Bearer $TOKEN" \
             -H 'Content-Type: application/json' \
             -d "$REGISTER_PAYLOAD" \
-            --max-time 30 -w "HTTP_STATUS:%{http_code}")
+            --max-time 30 \
+            -w "HTTP_STATUS:%{http_code}")
 
           HTTP_STATUS=$(echo "$REGISTER_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
           RESPONSE_BODY=$(echo "$REGISTER_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
@@ -160,14 +181,18 @@ jobs:
           case "$HTTP_STATUS" in
             200|201)
               APP_ID=$(echo "$RESPONSE_BODY" | jq -r '.id // .app_id // "unknown"')
+              echo "✅ App registered successfully!"
               echo "status=success" >> $GITHUB_OUTPUT
               echo "app_id=$APP_ID" >> $GITHUB_OUTPUT
               ;;
             409)
+              echo "ℹ️ App already exists"
               echo "status=already-exists" >> $GITHUB_OUTPUT
               echo "app_id=existing" >> $GITHUB_OUTPUT
               ;;
             *)
+              echo "❌ Registration failed with HTTP $HTTP_STATUS"
+              echo "Response: $RESPONSE_BODY"
               echo "status=failed" >> $GITHUB_OUTPUT
               exit 1
               ;;
