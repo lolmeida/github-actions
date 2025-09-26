@@ -80,6 +80,7 @@ jobs:
           echo "✅ Authentication successful"
           echo "token=$TOKEN" >> $GITHUB_OUTPUT
 
+
       - name: Register Application
         id: register
         shell: bash
@@ -111,7 +112,7 @@ jobs:
             --argjson isEnabled $IS_ENABLED \
             '{name: $name, url: $url, description: $description, icon: $icon, isActive: $isActive, isEnabled: $isEnabled}')
 
-          REGISTER_RESPONSE=$(curl -s -X POST "https://auth-be.lolmeida.com/api/apps" \
+          REGISTER_RESPONSE=$(curl -s -X POST "https://k8s-be.lolmeida.com/deployed-apps" \
             -H "Authorization: Bearer $TOKEN" \
             -H 'Content-Type: application/json' \
             -d "$REGISTER_PAYLOAD" \
