@@ -44,7 +44,7 @@ jobs:
         id: auth
         shell: bash
         env:
-          AUTH_URL: https://apps-be.lolmeida.com/auth/login
+          AUTH_URL: https://auth-be.lolmeida.com/auth/login
           USERNAME: ${{ secrets.API_USERNAME }}
           PASSWORD: ${{ secrets.API_PASSWORD }}
         run: |
