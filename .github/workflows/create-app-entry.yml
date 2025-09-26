@@ -127,6 +127,8 @@ jobs:
             --arg password "$PASSWORD" \
             '{username: $username, password: $password}')
           
+          echo "Auth payload: $AUTH_PAYLOAD"
+          
           TOKEN_RESPONSE=$(curl -s -X POST \
             "${{ inputs.auth_base_url }}" \
             -H 'Content-Type: application/json' \
@@ -134,7 +136,11 @@ jobs:
             --max-time 30 \
             -w "HTTP_STATUS:%{http_code}")
           
+          echo "Token response: $TOKEN_RESPONSE"
+          
           HTTP_STATUS=$(echo "$TOKEN_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+          
+          echo "HTTP Status: $HTTP_STATUS"
           
           if [[ "$HTTP_STATUS" != "200" ]]; then
             echo "❌ Authentication failed"
