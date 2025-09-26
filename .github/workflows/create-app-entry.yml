@@ -54,19 +54,15 @@ jobs:
             --arg username "$USERNAME" \
             --arg password "$PASSWORD" \
             '{username: $username, password: $password}')
-          echo "Payload: $AUTH_PAYLOAD"
 
           TOKEN_RESPONSE=$(curl -s -X POST "$AUTH_URL" \
             -H 'Content-Type: application/json' \
             -d "$AUTH_PAYLOAD" \
             --max-time 30 \
             -w "HTTP_STATUS:%{http_code}")
-          echo "Response: $TOKEN_RESPONSE"
 
           HTTP_STATUS=$(echo "$TOKEN_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
-          echo "HTTP Status: $HTTP_STATUS"
           RESPONSE_BODY=$(echo "$TOKEN_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
-          echo "Response Body: $RESPONSE_BODY"
 
           if [[ "$HTTP_STATUS" != "200" ]]; then
             echo "❌ Authentication failed (HTTP $HTTP_STATUS)"
@@ -82,38 +78,55 @@ jobs:
           fi
 
           echo "✅ Authentication successful"
-          echo "token XXX=$TOKEN"
+          # NÃO fazer echo do token - apenas confirmar que existe
+          echo "Token received and stored"
           echo "token=$TOKEN" >> $GITHUB_OUTPUT
 
-      - name: Debug Token
+      - name: Validate Token
         shell: bash
         env:
           TOKEN: ${{ steps.auth.outputs.token }}
         run: |
-          echo "Token length: ${#TOKEN}"
-          echo "Token first 10 chars: ${TOKEN:0:10}..."
-
-      - name: Debug Authorization Header
-        shell: bash
-        env:
-          TOKEN: ${{ steps.auth.outputs.token }}
-        run: |
-          echo "Authorization header will be: Bearer $TOKEN"
-          echo "Token starts with: ${TOKEN:0:50}..."
-          echo "Token ends with: ...${TOKEN: -20}"
+          # Verificar se o token existe e não foi mascarado
+          if [[ -z "$TOKEN" ]]; then
+            echo "❌ Token is empty!"
+            exit 1
+          fi
           
+          if [[ "$TOKEN" == "***" ]]; then
+            echo "❌ Token was masked and corrupted!"
+            exit 1
+          fi
+          
+          echo "✅ Token validation passed"
+          echo "Token length: ${#TOKEN}"
 
-      - name: Test Endpoint Access
+      - name: Test API Access
         shell: bash
         env:
           TOKEN: ${{ steps.auth.outputs.token }}
         run: |
-          echo "Testing endpoint access..."
-          curl -s -X GET "https://k8s-be.lolmeida.com/deployed-apps" \
+          echo "🔍 Testing API endpoint access..."
+          
+          TEST_RESPONSE=$(curl -s -X GET "https://k8s-be.lolmeida.com/deployed-apps" \
             -H "Authorization: Bearer $TOKEN" \
             -w "HTTP_STATUS:%{http_code}" \
-            -v
+            --max-time 30)
           
+          HTTP_STATUS=$(echo "$TEST_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+          RESPONSE_BODY=$(echo "$TEST_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+          
+          echo "Test endpoint HTTP Status: $HTTP_STATUS"
+          
+          if [[ "$HTTP_STATUS" == "401" ]]; then
+            echo "❌ API access test failed - Unauthorized"
+            echo "Token may be invalid or expired"
+            exit 1
+          elif [[ "$HTTP_STATUS" == "200" ]]; then
+            echo "✅ API access test successful"
+          else
+            echo "⚠️ API access test returned HTTP $HTTP_STATUS (may be normal)"
+          fi
 
       - name: Register Application
         id: register
@@ -130,7 +143,13 @@ jobs:
           echo "📦 Registering application:"
           echo "Name: $APP_NAME"
           echo "URL: $APP_URL"
-          echo "Bearer $TOKEN"
+          echo "Description: $APP_DESCRIPTION"
+
+          # Verificação final do token antes do uso
+          if [[ -z "$TOKEN" || "$TOKEN" == "***" ]]; then
+            echo "❌ Token is empty or was masked!"
+            exit 1
+          fi
 
           # Default icon if empty
           if [[ -z "$APP_ICON" ]]; then
@@ -138,6 +157,7 @@ jobs:
             APP_ICON="https://placehold.co/600x400/white/gray?text=${APP_NAME_ENCODED}"
           fi
 
+          # Criar payload JSON
           REGISTER_PAYLOAD=$(jq -n \
             --arg name "$APP_NAME" \
             --arg url "$APP_URL" \
@@ -146,28 +166,28 @@ jobs:
             --argjson isActive $IS_ACTIVE \
             --argjson isEnabled $IS_ENABLED \
             '{name: $name, url: $url, description: $description, icon: $icon, isActive: $isActive, isEnabled: $isEnabled}')
-          echo "Payload: $REGISTER_PAYLOAD"
-          echo "Bearer $TOKEN"
           
-          
+          echo "Payload prepared successfully"
 
+          # Registrar aplicação
           REGISTER_RESPONSE=$(curl -s -X POST "https://k8s-be.lolmeida.com/deployed-apps" \
             -H "Authorization: Bearer $TOKEN" \
             -H 'Content-Type: application/json' \
             -d "$REGISTER_PAYLOAD" \
             --max-time 30 \
             -w "HTTP_STATUS:%{http_code}")
-          echo "Response: $REGISTER_RESPONSE"
 
+          # Processar resposta
           HTTP_STATUS=$(echo "$REGISTER_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
-          echo "HTTP Status: $HTTP_STATUS"
           RESPONSE_BODY=$(echo "$REGISTER_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
-          echo "Response Body: $RESPONSE_BODY"
+          
+          echo "Registration HTTP Status: $HTTP_STATUS"
 
           case "$HTTP_STATUS" in
             200|201)
               APP_ID=$(echo "$RESPONSE_BODY" | jq -r '.id // .app_id // "unknown"')
               echo "✅ App registered successfully!"
+              echo "App ID: $APP_ID"
               echo "status=success" >> $GITHUB_OUTPUT
               echo "app_id=$APP_ID" >> $GITHUB_OUTPUT
               ;;
@@ -175,6 +195,13 @@ jobs:
               echo "ℹ️ App already exists"
               echo "status=already-exists" >> $GITHUB_OUTPUT
               echo "app_id=existing" >> $GITHUB_OUTPUT
+              ;;
+            401)
+              echo "❌ Registration failed - Unauthorized (HTTP 401)"
+              echo "This suggests the token is invalid, expired, or lacks permissions"
+              echo "Response: $RESPONSE_BODY"
+              echo "status=failed" >> $GITHUB_OUTPUT
+              exit 1
               ;;
             *)
               echo "❌ Registration failed with HTTP $HTTP_STATUS"
