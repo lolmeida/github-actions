@@ -24,10 +24,6 @@ on:
         required: false
         type: boolean
         default: true
-      dry_run:
-        required: false
-        type: boolean
-        default: false
       auth_base_url:
         required: false
         type: string
@@ -67,14 +63,14 @@ on:
         required: false
         type: boolean
         default: true
-      dry_run:
-        required: false
-        type: boolean
-        default: true
       auth_base_url:
         required: false
         type: string
         default: 'https://apps-be.lolmeida.com/auth/login'
+      dry_run:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   register:
@@ -86,20 +82,17 @@ jobs:
       - name: Resolve inputs
         id: resolve
         run: |
-          # Workflow Call vs Workflow Dispatch fallback
           APP_NAME="${{ inputs.app_name || github.event.inputs.app_name }}"
           APP_URL="${{ inputs.app_ingress || github.event.inputs.app_ingress }}"
           APP_DESCRIPTION="${{ inputs.app_description || github.event.inputs.app_description }}"
           APP_ICON="${{ inputs.app_icon || github.event.inputs.app_icon }}"
           IS_ACTIVE="${{ inputs.is_active || github.event.inputs.is_active || 'true' }}"
           IS_ENABLED="${{ inputs.is_enabled || github.event.inputs.is_enabled || 'true' }}"
-          DRY_RUN="${{ inputs.dry_run || github.event.inputs.dry_run || 'false' }}"
           AUTH_URL="${{ inputs.auth_base_url || github.event.inputs.auth_base_url || 'https://apps-be.lolmeida.com/auth/login' }}"
 
           # Normalizar valores booleanos
           IS_ACTIVE=$(echo "$IS_ACTIVE" | tr '[:upper:]' '[:lower:]')
           IS_ENABLED=$(echo "$IS_ENABLED" | tr '[:upper:]' '[:lower:]')
-          DRY_RUN=$(echo "$DRY_RUN" | tr '[:upper:]' '[:lower:]')
 
           # Exportar para próximos passos
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
@@ -108,7 +101,6 @@ jobs:
           echo "APP_ICON=$APP_ICON" >> $GITHUB_ENV
           echo "IS_ACTIVE=$IS_ACTIVE" >> $GITHUB_ENV
           echo "IS_ENABLED=$IS_ENABLED" >> $GITHUB_ENV
-          echo "DRY_RUN=$DRY_RUN" >> $GITHUB_ENV
           echo "AUTH_URL=$AUTH_URL" >> $GITHUB_ENV
 
       - name: Register application
@@ -117,14 +109,6 @@ jobs:
           echo "Registering application:"
           echo "Name: $APP_NAME"
           echo "URL: $APP_URL"
-          echo "Dry run: $DRY_RUN"
-
-          if [[ "$DRY_RUN" == "true" ]]; then
-            echo "🔍 DRY RUN MODE - Not actually registering"
-            echo "status=dry-run-success" >> $GITHUB_OUTPUT
-            echo "app_id=dry-run-id" >> $GITHUB_OUTPUT
-            exit 0
-          fi
 
           # Authenticate
           USERNAME="${{ secrets.API_USERNAME }}"
