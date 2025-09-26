@@ -1,51 +1,47 @@
-name: Generate UML Diagram
+name: Generate PlantUML Class Diagram
 
 on:
   workflow_call:
+    inputs:
+      java-version:
+        required: false
+        type: string
+        default: '21'
+      java-distribution:
+        required: false
+        type: string
+        default: 'temurin'
+      python-version:
+        required: false
+        type: string
+        default: '3.11'
 
 jobs:
-  generate-uml:
+  generate-diagram:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
-          java-version: "21"
-          distribution: "temurin"
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ inputs.java-version }}
 
-      - name: Build project (skip tests)
-        run: mvn -B clean compile -DskipTests
+      - name: Install dependencies
+        run: pip install --upgrade pip
 
-      - name: Download plantuml-generator
-        run: |
-          curl -L -o plantuml-generator.jar \
-            https://repo1.maven.org/maven2/nl/talsmasoftware/umldoclet/2.0.12/umldoclet-2.0.12.jar
+      - name: Generate PlantUML diagram
+        run: python generate-class-diagram.py
 
-      - name: Generate UML with plantuml-generator
-        run: |
-          mkdir -p docs
-          javadoc \
-            -doclet nl.talsmasoftware.umldoclet.UMLDoclet \
-            -docletpath plantuml-generator.jar \
-            -sourcepath src/main/java \
-            -subpackages com.lolmeida \
-            -quiet \
-            -d docs
-          # Move UML para o nome esperado
-          mv docs/uml.puml docs/class-diagram.puml || true
-
-      - name: Commit UML diagram if changed
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-          if ! git diff --quiet docs/class-diagram.puml; then
-            git add docs/class-diagram.puml
-            git commit -m "chore: update UML diagram [skip ci]"
-            git push
-          else
-            echo "No UML changes detected."
-          fi
+      - name: Upload diagram artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: class-diagram
+          path: docs/class-diagram.puml
