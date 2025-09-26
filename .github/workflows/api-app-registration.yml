@@ -17,12 +17,12 @@ on:
         description: 'URL do ícone da aplicação'
         required: false
         type: string
-      isActive:
+      is_active:
         description: 'Se a aplicação está ativa'
         required: false
         default: true
         type: boolean
-      isEnabled:
+      is_enabled:
         description: 'Se a aplicação está habilitada'
         required: false
         default: true
@@ -66,6 +66,6 @@ jobs:
               \"url\": \"${{ inputs.app_url }}\",
               \"description\": \"${{ inputs.app_description }}\",
               \"icon\": \"${{ inputs.app_icon }}\",
-              \"isEnabled\": \"${{ inputs.isEnabled }}\",
-              \"isActive\": \"${{ inputs.isActive }}\"
+              \"is_enabled\": \"${{ inputs.is_enabled }}\",
+              \"is_active\": \"${{ inputs.is_active }}\"
             }"
