@@ -92,6 +92,27 @@ jobs:
         run: |
           echo "Token length: ${#TOKEN}"
           echo "Token first 10 chars: ${TOKEN:0:10}..."
+
+      - name: Debug Authorization Header
+        shell: bash
+        env:
+          TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          echo "Authorization header will be: Bearer $TOKEN"
+          echo "Token starts with: ${TOKEN:0:50}..."
+          echo "Token ends with: ...${TOKEN: -20}"
+          
+
+      - name: Test Endpoint Access
+        shell: bash
+        env:
+          TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          echo "Testing endpoint access..."
+          curl -s -X GET "https://k8s-be.lolmeida.com/deployed-apps" \
+            -H "Authorization: Bearer $TOKEN" \
+            -w "HTTP_STATUS:%{http_code}" \
+            -v
           
 
       - name: Register Application
