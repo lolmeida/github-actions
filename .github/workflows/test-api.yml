@@ -27,7 +27,7 @@ jobs:
         id: connectivity
         run: |
           echo "Testing API base URL..."
-          if curl -f -s --max-time 10 "https://apps-be.lolmeida.com" >/dev/null; then
+          if curl -f -s --max-time 10 "https://apps-be.lolmeida.com/q/health" >/dev/null; then
             echo "✅ Base URL is reachable"
             echo "base_url_ok=true" >> $GITHUB_OUTPUT
           else
