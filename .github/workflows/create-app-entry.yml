@@ -113,6 +113,7 @@ jobs:
             --argjson isEnabled $IS_ENABLED \
             '{name: $name, url: $url, description: $description, icon: $icon, isActive: $isActive, isEnabled: $isEnabled}')
           echo "Payload: $REGISTER_PAYLOAD"
+          echo "Bearer $TOKEN"
           
           
 
