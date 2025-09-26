@@ -57,6 +57,12 @@ on:
         description: 'Application URL'
         required: true
         type: string
+        default: 'https://auth.lolmeida.com'
+      auth_base_url:
+        description: 'API base URL'
+        required: false
+        type: string
+        default: 'https://apps-be.lolmeida.com/auth/login'
       app_description:
         description: 'Application description'
         required: true
