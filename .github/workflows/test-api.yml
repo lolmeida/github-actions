@@ -113,6 +113,7 @@ jobs:
             -w "HTTP_STATUS:%{http_code}")
           
           HTTP_STATUS=$(echo "$AUTH_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+          echo "Received HTTP status: $HTTP_STATUS"
           
           if [[ "$HTTP_STATUS" == "200" ]]; then
             echo "✅ Authentication successful"
