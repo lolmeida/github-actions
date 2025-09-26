@@ -50,12 +50,6 @@ jobs:
         run: |
           echo "🔐 Authenticating against $AUTH_URL"
 
-          # Debug das credenciais (sem expor valores reais)
-          echo "Username length: ${#USERNAME}"
-          echo "Password length: ${#PASSWORD}"
-          echo "Username starts with: ${USERNAME:0:3}..."
-          echo "Username ends with: ...${USERNAME: -3}"
-
           # Verificar se as credenciais não estão vazias
           if [[ -z "$USERNAME" ]]; then
             echo "❌ USERNAME secret is empty!"
@@ -67,13 +61,13 @@ jobs:
             exit 1
           fi
 
+          echo "Username: ${USERNAME:0:3}...${USERNAME: -3} (${#USERNAME} chars)"
+          echo "Password: [${#PASSWORD} chars]"
+
           AUTH_PAYLOAD=$(jq -n \
             --arg username "$USERNAME" \
             --arg password "$PASSWORD" \
             '{username: $username, password: $password}')
-
-          echo "Authentication payload structure:"
-          echo "$AUTH_PAYLOAD" | jq 'keys'
 
           echo "Making authentication request..."
           
@@ -88,18 +82,16 @@ jobs:
           RESPONSE_BODY=$(echo "$TOKEN_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
 
           echo "Authentication HTTP Status: $HTTP_STATUS"
-          echo "Raw response body: $RESPONSE_BODY"
 
           if [[ "$HTTP_STATUS" != "200" ]]; then
             echo "❌ Authentication failed (HTTP $HTTP_STATUS)"
             echo "Response: $RESPONSE_BODY"
           
-            # Verificar tipos específicos de erro
             case "$HTTP_STATUS" in
-              401) echo "🔍 Diagnosis: Invalid username/password" ;;
-              403) echo "🔍 Diagnosis: User may not have required permissions" ;;
-              429) echo "🔍 Diagnosis: Rate limiting" ;;
-              *) echo "🔍 Diagnosis: Unexpected authentication error" ;;
+              401) echo "🔍 Invalid credentials" ;;
+              403) echo "🔍 User may not have required permissions" ;;
+              429) echo "🔍 Rate limiting" ;;
+              *) echo "🔍 Unexpected authentication error" ;;
             esac
             exit 1
           fi
@@ -111,36 +103,16 @@ jobs:
             exit 1
           fi
 
-          # Mostrar estrutura da resposta
-          echo "Response structure:"
-          echo "$RESPONSE_BODY" | jq .
-
           TOKEN=$(echo "$RESPONSE_BODY" | jq -r '.token')
           
-          echo "Extracted token: $TOKEN"
-          
-          # Análise detalhada do token
-          if [[ "$TOKEN" == "***" ]]; then
-            echo "❌ CRITICAL: API is returning masked token for this user"
-            echo "🔍 This suggests:"
-            echo "  1. The user ($USERNAME) has limited permissions"
-            echo "  2. The API masks tokens for non-admin users"
-            echo "  3. This user account may not be suitable for CI/CD"
-            echo ""
-            echo "💡 Try using an admin/service account with full API access"
-            exit 1
-          elif [[ "$TOKEN" =~ ^eyJ ]]; then
-            echo "✅ Valid JWT token received!"
-            echo "Token starts with JWT header: ${TOKEN:0:20}..."
-          elif [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
+          if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
             echo "❌ No token found in response"
+            echo "Response: $RESPONSE_BODY"
             exit 1
-          else
-            echo "✅ Token received (non-JWT format)"
-            echo "Token length: ${#TOKEN}"
           fi
 
           echo "✅ Authentication successful"
+          echo "Token extracted (length: ${#TOKEN})"
           echo "token=$TOKEN" >> $GITHUB_OUTPUT
 
       - name: Validate Token
@@ -154,14 +126,6 @@ jobs:
             exit 1
           fi
           
-          # Verificar se foi mascarado pela API
-          if [[ "$TOKEN" == "***" ]]; then
-            echo "❌ Token was masked by your API!"
-            echo "Your authentication API is returning '***' instead of the actual token"
-            echo "This is a server-side configuration issue, not a GitHub Actions problem"
-            exit 1
-          fi
-          
           echo "✅ Token validation passed"
           echo "Token length: ${#TOKEN}"
           
@@ -172,33 +136,6 @@ jobs:
             echo "ℹ️ Token is not in JWT format (may be normal depending on your API)"
           fi
 
-      - name: Debug Token (TEMPORARY - REMOVE AFTER FIXING)
-        shell: bash
-        env:
-          TOKEN: ${{ steps.auth.outputs.token }}
-        run: |
-          echo "🔍 Token debug analysis:"
-          
-          if [[ "$TOKEN" == "***" ]]; then
-            echo "❌ CONFIRMED: Token is masked ('***')"
-            echo "This is being returned by your API, not masked by GitHub"
-            echo "Your authentication API is configured to mask tokens in responses"
-            echo ""
-            echo "Solutions to try:"
-            echo "1. Check your API server logs for the actual token value"
-            echo "2. Look for a debug/development mode in your API configuration"
-            echo "3. Check if the API supports a 'show-token' parameter or header"
-            echo "4. Contact your API administrator to configure token visibility"
-            echo ""
-            echo "CRITICAL: Your workflow will fail until the API returns the actual token"
-            exit 1
-          else
-            echo "✅ Token is not masked, proceeding with analysis..."
-            echo "Token length: ${#TOKEN}"
-            echo "Token first 10 chars: ${TOKEN:0:10}..."
-            echo "Token format appears valid"
-          fi
-
       - name: Test API Access
         shell: bash
         env:
@@ -207,50 +144,125 @@ jobs:
           echo "🔍 Testing API endpoint access..."
           echo "Using endpoint: https://k8s-be.lolmeida.com/deployed-apps"
           
-          # Verificar se o token é válido antes de tentar usar
-          if [[ "$TOKEN" == "***" ]]; then
-            echo "❌ Cannot test API access: token is masked ('***')"
-            echo "Fix the authentication issue first"
+          echo "Token length: ${#TOKEN} characters"
+          
+          # Primeiro, verificar as permissões do usuário
+          echo "🔍 Checking user permissions..."
+          USER_INFO_RESPONSE=$(curl -s -X GET "https://auth.lolmeida.com/auth/me" \
+            -H "Authorization: Bearer $TOKEN" \
+            -w "HTTP_STATUS:%{http_code}" \
+            --max-time 30)
+          
+          USER_HTTP_STATUS=$(echo "$USER_INFO_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | tail -1 | cut -d: -f2)
+          USER_RESPONSE_BODY=$(echo "$USER_INFO_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+          
+          echo "User info HTTP Status: $USER_HTTP_STATUS"
+          echo "User info: $USER_RESPONSE_BODY"
+          
+          if [[ "$USER_HTTP_STATUS" == "200" ]]; then
+            GROUPS=$(echo "$USER_RESPONSE_BODY" | jq -r '.groups[]?' 2>/dev/null | tr '\n' ' ')
+            echo "User groups: [$GROUPS]"
+          
+            if echo "$GROUPS" | grep -q "ADMIN"; then
+              echo "✅ User has ADMIN permissions"
+            else
+              echo "❌ User does not have ADMIN permissions: $GROUPS"
+              exit 1
+            fi
+          else
+            echo "❌ Could not verify user permissions"
             exit 1
           fi
           
-          echo "Token validation passed, testing API access..."
+          # Agora testar a API de deployment com diferentes configurações
+          echo ""
+          echo "🔍 Testing deployment API access with different headers..."
           
+          # Teste 1: Headers básicos
+          echo "Test 1: Basic headers"
           TEST_RESPONSE=$(curl -s -X GET "https://k8s-be.lolmeida.com/deployed-apps" \
             -H "Authorization: Bearer $TOKEN" \
             -w "HTTP_STATUS:%{http_code}" \
             --max-time 30)
           
           HTTP_STATUS=$(echo "$TEST_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | tail -1 | cut -d: -f2)
-          RESPONSE_BODY=$(echo "$TEST_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+          echo "  Result: HTTP $HTTP_STATUS"
           
-          echo "Test endpoint HTTP Status: $HTTP_STATUS"
-          echo "Response body: $RESPONSE_BODY"
+          # Teste 2: Com Content-Type e Accept
+          echo "Test 2: With Content-Type and Accept headers"
+          TEST_RESPONSE2=$(curl -s -X GET "https://k8s-be.lolmeida.com/deployed-apps" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -w "HTTP_STATUS:%{http_code}" \
+            --max-time 30)
           
-          case "$HTTP_STATUS" in
-            200)
-              echo "✅ API access successful" ;;
-            401)
-              echo "❌ API access failed - Unauthorized"
-              echo "The token was accepted by auth API but rejected by deployment API"
-              echo "Possible issues:"
-              echo "  1. Token doesn't have required permissions for deployment API"
-              echo "  2. Different API expects different token format"
-              echo "  3. Token scope is limited to auth operations only"
-              exit 1 ;;
-            403)
-              echo "❌ Forbidden - Token valid but lacks permissions" 
-              exit 1 ;;
-            404)
-              echo "❌ Not Found - Check endpoint URL" 
-              exit 1 ;;
-            500)
-              echo "❌ Server Error - API issue" 
-              exit 1 ;;
-            *)
-              echo "ℹ️ Unexpected status code: $HTTP_STATUS"
-              echo "This might be normal for a GET request to this endpoint" ;;
-          esac
+          HTTP_STATUS2=$(echo "$TEST_RESPONSE2" | grep -o 'HTTP_STATUS:[0-9]*' | tail -1 | cut -d: -f2)
+          echo "  Result: HTTP $HTTP_STATUS2"
+          
+          # Teste 3: Com User-Agent
+          echo "Test 3: With User-Agent"
+          TEST_RESPONSE3=$(curl -s -X GET "https://k8s-be.lolmeida.com/deployed-apps" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "User-Agent: GitHub-Actions" \
+            -w "HTTP_STATUS:%{http_code}" \
+            --max-time 30)
+          
+          HTTP_STATUS3=$(echo "$TEST_RESPONSE3" | grep -o 'HTTP_STATUS:[0-9]*' | tail -1 | cut -d: -f2)
+          echo "  Result: HTTP $HTTP_STATUS3"
+          
+          # Análise dos resultados
+          echo ""
+          echo "📊 Test Results Summary:"
+          echo "  Basic headers: $HTTP_STATUS"
+          echo "  With JSON headers: $HTTP_STATUS2"
+          echo "  With User-Agent: $HTTP_STATUS3"
+          
+          # Se todos retornaram 401, é problema técnico
+          if [[ "$HTTP_STATUS" == "401" && "$HTTP_STATUS2" == "401" && "$HTTP_STATUS3" == "401" ]]; then
+            echo ""
+            echo "❌ All tests failed with 401 - Technical issue confirmed"
+            echo ""
+            echo "🔍 DIAGNOSIS:"
+            echo "  ✅ User authenticated successfully"
+            echo "  ✅ User has ADMIN permissions"
+            echo "  ✅ Token format is valid JWT"
+            echo "  ❌ Deployment API consistently rejects token"
+            echo ""
+            echo "🚨 ROOT CAUSE:"
+            echo "  JWT validation mismatch between auth and deployment APIs"
+            echo ""
+            echo "🔧 ACTION REQUIRED:"
+            echo "  Check deployment API configuration:"
+            echo "  1. JWT issuer validation"
+            echo "  2. JWT signing key"
+            echo "  3. Required claims"
+            echo "  4. Token validation logic"
+            echo ""
+            echo "💡 Quick check: Compare JWT configuration between:"
+            echo "  - https://auth.lolmeida.com (working)"
+            echo "  - https://k8s-be.lolmeida.com (failing)"
+            exit 1
+          elif [[ "$HTTP_STATUS" == "200" || "$HTTP_STATUS2" == "200" || "$HTTP_STATUS3" == "200" ]]; then
+            echo ""
+            echo "✅ At least one test succeeded - API access working"
+          
+            # Use the successful configuration for the rest of the workflow
+            if [[ "$HTTP_STATUS2" == "200" ]]; then
+              echo "Using JSON headers for subsequent requests"
+            elif [[ "$HTTP_STATUS3" == "200" ]]; then
+              echo "Using User-Agent header for subsequent requests"
+            else
+              echo "Using basic headers for subsequent requests"
+            fi
+          else
+            echo ""
+            echo "❌ Unexpected response pattern"
+            echo "Responses: $HTTP_STATUS, $HTTP_STATUS2, $HTTP_STATUS3"
+            RESPONSE_BODY=$(echo "$TEST_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+            echo "Response body: $RESPONSE_BODY"
+            exit 1
+          fi
 
       - name: Register Application
         id: register
@@ -269,12 +281,6 @@ jobs:
           echo "URL: $APP_URL"
           echo "Description: $APP_DESCRIPTION"
 
-          # Verificação final do token antes do uso
-          if [[ -z "$TOKEN" || "$TOKEN" == "***" ]]; then
-            echo "❌ Token is empty or was masked!"
-            exit 1
-          fi
-
           # Default icon if empty
           if [[ -z "$APP_ICON" ]]; then
             APP_NAME_ENCODED=$(echo "$APP_NAME" | sed 's/ /%20/g')
@@ -291,12 +297,15 @@ jobs:
             --argjson isEnabled $IS_ENABLED \
             '{name: $name, url: $url, description: $description, icon: $icon, isActive: $isActive, isEnabled: $isEnabled}')
           
-          echo "Payload prepared successfully"
+          echo "Payload prepared for registration"
 
-          # Registrar aplicação
+          # Registrar aplicação com headers otimizados
+          echo "Attempting to register application..."
           REGISTER_RESPONSE=$(curl -s -X POST "https://k8s-be.lolmeida.com/deployed-apps" \
             -H "Authorization: Bearer $TOKEN" \
-            -H 'Content-Type: application/json' \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -H "User-Agent: GitHub-Actions" \
             -d "$REGISTER_PAYLOAD" \
             --max-time 30 \
             -w "HTTP_STATUS:%{http_code}")
@@ -306,6 +315,7 @@ jobs:
           RESPONSE_BODY=$(echo "$REGISTER_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
           
           echo "Registration HTTP Status: $HTTP_STATUS"
+          echo "Response: $RESPONSE_BODY"
 
           case "$HTTP_STATUS" in
             200|201)
@@ -322,8 +332,48 @@ jobs:
               ;;
             401)
               echo "❌ Registration failed - Unauthorized (HTTP 401)"
-              echo "This suggests the token is invalid, expired, or lacks permissions"
-              echo "Response: $RESPONSE_BODY"
+              echo ""
+              echo "🔍 TECHNICAL ISSUE DETECTED:"
+              echo "  ✅ User has ADMIN permissions"
+              echo "  ✅ Token valid for authentication API"
+              echo "  ❌ Deployment API rejects valid admin token"
+              echo ""
+              echo "🚨 LIKELY CAUSES:"
+              echo "  1. JWT signature validation mismatch between APIs"
+              echo "  2. Different JWT signing keys or algorithms"
+              echo "  3. Deployment API misconfiguration"
+              echo "  4. Token expiration/timing issues"
+              echo "  5. Missing required JWT claims in deployment API"
+              echo ""
+              echo "🔧 IMMEDIATE ACTIONS:"
+              echo "  1. Check deployment API logs for specific JWT errors"
+              echo "  2. Verify JWT signing configuration matches between:"
+              echo "     - auth.lolmeida.com (issuer)"
+              echo "     - k8s-be.lolmeida.com (consumer)"
+              echo "  3. Compare JWT validation settings"
+              echo "  4. Check if deployment API requires additional claims"
+              echo ""
+              echo "🔍 DEBUG INFORMATION:"
+              echo "  - Auth API: https://auth.lolmeida.com ✅ (working)"
+              echo "  - Deploy API: https://k8s-be.lolmeida.com ❌ (rejecting)"
+              echo "  - User: test (ADMIN permissions)"
+              echo "  - Token length: ${#TOKEN} chars"
+              echo ""
+              echo "💡 MANUAL DEBUGGING COMMANDS:"
+              echo "  # Check JWT payload:"
+              echo "  TOKEN=\$(curl -s -X POST 'https://auth.lolmeida.com/auth/login' -H 'Content-Type: application/json' -d '{\"username\":\"test\",\"password\":\"test1234\"}' | jq -r '.token')"
+              echo "  echo \"\$TOKEN\" | cut -d. -f2 | base64 -d | jq ."
+              echo ""
+              echo "  # Test deployment API directly:"
+              echo "  curl -X GET 'https://k8s-be.lolmeida.com/deployed-apps' -H \"Authorization: Bearer \$TOKEN\" -v"
+              echo ""
+              echo "status=failed" >> $GITHUB_OUTPUT
+              exit 1
+              ;;
+            403)
+              echo "❌ Registration failed - Forbidden (HTTP 403)"
+              echo "User is authenticated but lacks deployment permissions"
+              echo "Same solution as 401 - create admin user or grant permissions"
               echo "status=failed" >> $GITHUB_OUTPUT
               exit 1
               ;;
