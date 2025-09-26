@@ -81,12 +81,6 @@ on:
         default: 'https://apps-be.lolmeida.com/auth/login'
         description:
           'Authentication endpoint URL'
-      dry_run:
-        required: false
-        type: boolean
-        default: false
-        description:
-          'If true, only simulates the registration'
 
 jobs:
   register:
