@@ -4,15 +4,15 @@ on:
   workflow_call:
     inputs:
       java-version:
-        required: false
+        required: true
         type: string
         default: '21'
       java-distribution:
-        required: false
+        required: true
         type: string
         default: 'temurin'
       python-version:
-        required: false
+        required: true
         type: string
         default: '3.11'
 
