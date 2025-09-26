@@ -111,6 +111,7 @@ jobs:
             --argjson isActive $IS_ACTIVE \
             --argjson isEnabled $IS_ENABLED \
             '{name: $name, url: $url, description: $description, icon: $icon, isActive: $isActive, isEnabled: $isEnabled}')
+          echo "Payload: $REGISTER_PAYLOAD"
 
           REGISTER_RESPONSE=$(curl -s -X POST "https://k8s-be.lolmeida.com/deployed-apps" \
             -H "Authorization: Bearer $TOKEN" \
@@ -118,9 +119,12 @@ jobs:
             -d "$REGISTER_PAYLOAD" \
             --max-time 30 \
             -w "HTTP_STATUS:%{http_code}")
+          echo "Response: $REGISTER_RESPONSE"
 
           HTTP_STATUS=$(echo "$REGISTER_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+          echo "HTTP Status: $HTTP_STATUS"
           RESPONSE_BODY=$(echo "$REGISTER_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+          echo "Response Body: $RESPONSE_BODY"
 
           case "$HTTP_STATUS" in
             200|201)
