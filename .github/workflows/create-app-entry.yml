@@ -96,6 +96,7 @@ jobs:
           echo "📦 Registering application:"
           echo "Name: $APP_NAME"
           echo "URL: $APP_URL"
+          echo "Bearer $TOKEN"
 
           # Default icon if empty
           if [[ -z "$APP_ICON" ]]; then
@@ -113,7 +114,7 @@ jobs:
             '{name: $name, url: $url, description: $description, icon: $icon, isActive: $isActive, isEnabled: $isEnabled}')
           echo "Payload: $REGISTER_PAYLOAD"
           
-          echo "Bearer $TOKEN"
+          
 
           REGISTER_RESPONSE=$(curl -s -X POST "https://k8s-be.lolmeida.com/deployed-apps" \
             -H "Authorization: Bearer $TOKEN" \
