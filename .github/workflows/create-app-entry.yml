@@ -50,46 +50,97 @@ jobs:
         run: |
           echo "🔐 Authenticating against $AUTH_URL"
 
+          # Debug das credenciais (sem expor valores reais)
+          echo "Username length: ${#USERNAME}"
+          echo "Password length: ${#PASSWORD}"
+          echo "Username starts with: ${USERNAME:0:3}..."
+          echo "Username ends with: ...${USERNAME: -3}"
+
+          # Verificar se as credenciais não estão vazias
+          if [[ -z "$USERNAME" ]]; then
+            echo "❌ USERNAME secret is empty!"
+            exit 1
+          fi
+          
+          if [[ -z "$PASSWORD" ]]; then
+            echo "❌ PASSWORD secret is empty!"
+            exit 1
+          fi
+
           AUTH_PAYLOAD=$(jq -n \
             --arg username "$USERNAME" \
             --arg password "$PASSWORD" \
             '{username: $username, password: $password}')
 
-          echo "Authentication payload prepared (credentials hidden)"
+          echo "Authentication payload structure:"
+          echo "$AUTH_PAYLOAD" | jq 'keys'
 
+          echo "Making authentication request..."
+          
           TOKEN_RESPONSE=$(curl -s -X POST "$AUTH_URL" \
             -H 'Content-Type: application/json' \
             -d "$AUTH_PAYLOAD" \
             --max-time 30 \
-            -w "HTTP_STATUS:%{http_code}" \
-            -v 2>&1)
+            -w "HTTP_STATUS:%{http_code}")
 
-          echo "Full authentication response:"
-          echo "$TOKEN_RESPONSE"
-
+          # Separar status da resposta
           HTTP_STATUS=$(echo "$TOKEN_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | tail -1 | cut -d: -f2)
           RESPONSE_BODY=$(echo "$TOKEN_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
 
           echo "Authentication HTTP Status: $HTTP_STATUS"
-          echo "Response body: $RESPONSE_BODY"
+          echo "Raw response body: $RESPONSE_BODY"
 
           if [[ "$HTTP_STATUS" != "200" ]]; then
             echo "❌ Authentication failed (HTTP $HTTP_STATUS)"
             echo "Response: $RESPONSE_BODY"
+          
+            # Verificar tipos específicos de erro
+            case "$HTTP_STATUS" in
+              401) echo "🔍 Diagnosis: Invalid username/password" ;;
+              403) echo "🔍 Diagnosis: User may not have required permissions" ;;
+              429) echo "🔍 Diagnosis: Rate limiting" ;;
+              *) echo "🔍 Diagnosis: Unexpected authentication error" ;;
+            esac
             exit 1
           fi
 
-          TOKEN=$(echo "$RESPONSE_BODY" | jq -r '.token')
-          if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
-            echo "❌ No token found in response"
-            echo "Full response: $RESPONSE_BODY"
-            echo "Available fields in response:"
-            echo "$RESPONSE_BODY" | jq -r 'keys[]?' 2>/dev/null || echo "Response is not valid JSON"
+          # Verificar se a resposta é JSON válido
+          if ! echo "$RESPONSE_BODY" | jq . >/dev/null 2>&1; then
+            echo "❌ Response is not valid JSON"
+            echo "Raw response: $RESPONSE_BODY"
             exit 1
+          fi
+
+          # Mostrar estrutura da resposta
+          echo "Response structure:"
+          echo "$RESPONSE_BODY" | jq .
+
+          TOKEN=$(echo "$RESPONSE_BODY" | jq -r '.token')
+          
+          echo "Extracted token: $TOKEN"
+          
+          # Análise detalhada do token
+          if [[ "$TOKEN" == "***" ]]; then
+            echo "❌ CRITICAL: API is returning masked token for this user"
+            echo "🔍 This suggests:"
+            echo "  1. The user ($USERNAME) has limited permissions"
+            echo "  2. The API masks tokens for non-admin users"
+            echo "  3. This user account may not be suitable for CI/CD"
+            echo ""
+            echo "💡 Try using an admin/service account with full API access"
+            exit 1
+          elif [[ "$TOKEN" =~ ^eyJ ]]; then
+            echo "✅ Valid JWT token received!"
+            echo "Token starts with JWT header: ${TOKEN:0:20}..."
+          elif [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
+            echo "❌ No token found in response"
+            exit 1
+          else
+            echo "✅ Token received (non-JWT format)"
+            echo "Token length: ${#TOKEN}"
           fi
 
           echo "✅ Authentication successful"
-          echo "Token extracted from response"
           echo "token=$TOKEN" >> $GITHUB_OUTPUT
 
       - name: Validate Token
@@ -97,24 +148,22 @@ jobs:
         env:
           TOKEN: ${{ steps.auth.outputs.token }}
         run: |
-          # Verificar se o token existe e não foi mascarado
+          # Verificar se o token existe
           if [[ -z "$TOKEN" ]]; then
             echo "❌ Token is empty!"
             exit 1
           fi
           
+          # Verificar se foi mascarado pela API
           if [[ "$TOKEN" == "***" ]]; then
-            echo "❌ Token was masked and corrupted!"
+            echo "❌ Token was masked by your API!"
+            echo "Your authentication API is returning '***' instead of the actual token"
+            echo "This is a server-side configuration issue, not a GitHub Actions problem"
             exit 1
           fi
           
           echo "✅ Token validation passed"
           echo "Token length: ${#TOKEN}"
-          
-          # Debug seguro do token - mostrar caracteres de forma indireta
-          echo "Token first 20 chars (base64): $(echo -n "${TOKEN:0:20}" | base64)"
-          echo "Token last 10 chars (base64): $(echo -n "${TOKEN: -10}" | base64)"
-          echo "Token middle chars 30-40 (base64): $(echo -n "${TOKEN:30:10}" | base64)"
           
           # Verificar se o token tem formato JWT (se aplicável)
           if [[ "$TOKEN" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]; then
@@ -122,37 +171,33 @@ jobs:
           else
             echo "ℹ️ Token is not in JWT format (may be normal depending on your API)"
           fi
-          
-          # Mostrar caracteres específicos para debug
-          echo "Char at position 10: $(echo -n "${TOKEN:10:1}" | od -c)"
-          echo "Char at position 50: $(echo -n "${TOKEN:50:1}" | od -c)"
 
       - name: Debug Token (TEMPORARY - REMOVE AFTER FIXING)
         shell: bash
         env:
           TOKEN: ${{ steps.auth.outputs.token }}
         run: |
-          echo "🔍 Full token debug (REMOVE THIS STEP AFTER FIXING):"
+          echo "🔍 Token debug analysis:"
           
-          # Método 1: Mostrar token usando printf para evitar mascaramento
-          printf "Full token: %s\n" "$TOKEN"
-          
-          # Método 2: Mostrar token character por character
-          echo "Token char by char:"
-          for (( i=0; i<${#TOKEN}; i++ )); do
-            printf "%c" "${TOKEN:$i:1}"
-          done
-          printf "\n"
-          
-          # Método 3: Mostrar token em hexadecimal
-          echo "Token in hex:"
-          echo -n "$TOKEN" | hexdump -C
-          
-          # Método 4: Usar diferentes encoding
-          echo "Token base64 encoded:"
-          echo -n "$TOKEN" | base64
-          
-          echo "⚠️ REMEMBER TO REMOVE THIS DEBUG STEP AFTER FIXING THE ISSUE!"
+          if [[ "$TOKEN" == "***" ]]; then
+            echo "❌ CONFIRMED: Token is masked ('***')"
+            echo "This is being returned by your API, not masked by GitHub"
+            echo "Your authentication API is configured to mask tokens in responses"
+            echo ""
+            echo "Solutions to try:"
+            echo "1. Check your API server logs for the actual token value"
+            echo "2. Look for a debug/development mode in your API configuration"
+            echo "3. Check if the API supports a 'show-token' parameter or header"
+            echo "4. Contact your API administrator to configure token visibility"
+            echo ""
+            echo "CRITICAL: Your workflow will fail until the API returns the actual token"
+            exit 1
+          else
+            echo "✅ Token is not masked, proceeding with analysis..."
+            echo "Token length: ${#TOKEN}"
+            echo "Token first 10 chars: ${TOKEN:0:10}..."
+            echo "Token format appears valid"
+          fi
 
       - name: Test API Access
         shell: bash
@@ -162,45 +207,50 @@ jobs:
           echo "🔍 Testing API endpoint access..."
           echo "Using endpoint: https://k8s-be.lolmeida.com/deployed-apps"
           
-          # Mostrar o header Authorization que será enviado (sem mascaramento)
-          AUTH_HEADER="Bearer $TOKEN"
-          echo "Authorization header length: ${#AUTH_HEADER}"
-          echo "Authorization header starts with: $(echo -n "$AUTH_HEADER" | cut -c1-20)..."
+          # Verificar se o token é válido antes de tentar usar
+          if [[ "$TOKEN" == "***" ]]; then
+            echo "❌ Cannot test API access: token is masked ('***')"
+            echo "Fix the authentication issue first"
+            exit 1
+          fi
+          
+          echo "Token validation passed, testing API access..."
           
           TEST_RESPONSE=$(curl -s -X GET "https://k8s-be.lolmeida.com/deployed-apps" \
             -H "Authorization: Bearer $TOKEN" \
             -w "HTTP_STATUS:%{http_code}" \
-            --max-time 30 \
-            -v 2>&1)
-          
-          echo "Full curl response:"
-          echo "$TEST_RESPONSE"
+            --max-time 30)
           
           HTTP_STATUS=$(echo "$TEST_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | tail -1 | cut -d: -f2)
           RESPONSE_BODY=$(echo "$TEST_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
           
           echo "Test endpoint HTTP Status: $HTTP_STATUS"
+          echo "Response body: $RESPONSE_BODY"
           
-          if [[ "$HTTP_STATUS" == "401" ]]; then
-            echo "❌ API access failed - Unauthorized"
-            echo "This means the token is either:"
-            echo "  1. Invalid or malformed"
-            echo "  2. Expired"
-            echo "  3. Missing required permissions"
-            echo "  4. Not being sent correctly"
-            echo "Full response body: $RESPONSE_BODY"
-            exit 1
-          elif [[ "$HTTP_STATUS" == "200" ]]; then
-            echo "✅ API access successful"
-          else
-            echo "ℹ️ API access returned HTTP $HTTP_STATUS (analyzing...)"
-            case "$HTTP_STATUS" in
-              403) echo "❌ Forbidden - Token valid but lacks permissions" ;;
-              404) echo "❌ Not Found - Check endpoint URL" ;;
-              500) echo "❌ Server Error - API issue" ;;
-              *) echo "ℹ️ Unexpected status code" ;;
-            esac
-          fi
+          case "$HTTP_STATUS" in
+            200)
+              echo "✅ API access successful" ;;
+            401)
+              echo "❌ API access failed - Unauthorized"
+              echo "The token was accepted by auth API but rejected by deployment API"
+              echo "Possible issues:"
+              echo "  1. Token doesn't have required permissions for deployment API"
+              echo "  2. Different API expects different token format"
+              echo "  3. Token scope is limited to auth operations only"
+              exit 1 ;;
+            403)
+              echo "❌ Forbidden - Token valid but lacks permissions" 
+              exit 1 ;;
+            404)
+              echo "❌ Not Found - Check endpoint URL" 
+              exit 1 ;;
+            500)
+              echo "❌ Server Error - API issue" 
+              exit 1 ;;
+            *)
+              echo "ℹ️ Unexpected status code: $HTTP_STATUS"
+              echo "This might be normal for a GET request to this endpoint" ;;
+          esac
 
       - name: Register Application
         id: register
