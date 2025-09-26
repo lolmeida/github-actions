@@ -53,7 +53,7 @@ on:
         description: 'Application name'
         required: true
         type: string
-      app_url:
+      app_ingress:
         description: 'Application URL'
         required: true
         type: string
@@ -98,7 +98,7 @@ jobs:
         id: register-app
         run: |
           APP_NAME="${{ inputs.app_name || github.event.inputs.app_name }}"
-          APP_URL="${{ inputs.app_url || github.event.inputs.app_url }}"
+          APP_URL="${{ inputs.app_ingress || github.event.inputs.app_ingress }}"
           APP_DESCRIPTION="${{ inputs.app_description || github.event.inputs.app_description }}"
           APP_ICON="${{ inputs.app_icon || github.event.inputs.app_icon }}"
           IS_ACTIVE="${{ inputs.is_active || github.event.inputs.is_active }}"
@@ -128,7 +128,7 @@ jobs:
             '{username: $username, password: $password}')
           
           TOKEN_RESPONSE=$(curl -s -X POST \
-            "https://apps-be.lolmeida.com/auth/login" \
+            "${{ inputs.auth_base_url }}" \
             -H 'Content-Type: application/json' \
             -d "$AUTH_PAYLOAD" \
             --max-time 30 \
