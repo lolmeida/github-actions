@@ -13,6 +13,20 @@ on:
         description: 'Callback / redirect URL'
         required: true
         type: string
+      app_icon:
+        description: 'URL do ícone da aplicação'
+        required: false
+        type: string
+      isActive:
+        description: 'Se a aplicação está ativa'
+        required: false
+        default: true
+        type: boolean
+      isEnabled:
+        description: 'Se a aplicação está habilitada'
+        required: false
+        default: true
+        type: boolean
       app_description:
         description: 'Descrição da aplicação'
         required: false
@@ -51,6 +65,7 @@ jobs:
               \"name\": \"${{ inputs.app_name }}\",
               \"url\": \"${{ inputs.app_url }}\",
               \"description\": \"${{ inputs.app_description }}\",
-              \"image\": \"${{ inputs.image_name }}\",
-              \"dryRun\": \"${{ inputs.dry_run }}\"
+              \"icon\": \"${{ inputs.app_icon }}\",
+              \"isEnabled\": \"${{ inputs.isEnabled }}\",
+              \"isActive\": \"${{ inputs.isActive }}\"
             }"
