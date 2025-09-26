@@ -84,8 +84,15 @@ jobs:
           echo "✅ Authentication successful"
           echo "token XXX=$TOKEN"
           echo "token=$TOKEN" >> $GITHUB_OUTPUT
-          
 
+      - name: Debug Token
+        shell: bash
+        env:
+          TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          echo "Token length: ${#TOKEN}"
+          echo "Token first 10 chars: ${TOKEN:0:10}..."
+          
 
       - name: Register Application
         id: register
