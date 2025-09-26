@@ -7,7 +7,7 @@ on:
         description: 'Application name'
         required: true
         type: string
-      app_url:
+      app_ingress:
         description: 'Application URL'
         required: true
         type: string
