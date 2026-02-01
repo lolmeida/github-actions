@@ -1,0 +1,82 @@
+name: Helm Deploy (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      release_name:
+        description: 'Helm release name'
+        required: true
+        type: string
+      namespace:
+        description: 'Kubernetes namespace'
+        required: true
+        type: string
+      chart_repo:
+        description: 'Git repo URL containing the Helm chart'
+        required: true
+        type: string
+      chart_path:
+        description: 'Path to chart inside chart repo'
+        required: true
+        type: string
+      values_file:
+        description: 'Values file path in caller repo'
+        required: true
+        type: string
+      create_namespace:
+        description: 'Create namespace if missing'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      KUBE_CONFIG:
+        required: false
+      KUBE_CONFIG_B64:
+        required: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Validate kubeconfig secrets
+        run: |
+          if [[ -z "${KUBE_CONFIG}" && -z "${KUBE_CONFIG_B64}" ]]; then
+            echo "Missing kubeconfig: set KUBE_CONFIG or KUBE_CONFIG_B64 secret" >&2
+            exit 1
+          fi
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
+
+      - name: Configure kubeconfig (raw or base64)
+        run: |
+          mkdir -p "$HOME/.kube"
+          if [[ -n "${KUBE_CONFIG_B64}" ]]; then
+            echo "${KUBE_CONFIG_B64}" | base64 --decode > "$HOME/.kube/config"
+          else
+            echo "${KUBE_CONFIG}" > "$HOME/.kube/config"
+          fi
+          chmod 600 "$HOME/.kube/config"
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
+
+      - name: Clone Helm charts
+        run: git clone "${{ inputs.chart_repo }}" charts-repo
+
+      - name: Deploy with Helm
+        run: |
+          ARGS=("upgrade" "--install" "${{ inputs.release_name }}" "${{ inputs.chart_path }}" "-n" "${{ inputs.namespace }}" "-f" "${{ inputs.values_file }}")
+          if [[ "${{ inputs.create_namespace }}" == "true" ]]; then
+            ARGS+=("--create-namespace")
+          fi
+          helm "${ARGS[@]}"
