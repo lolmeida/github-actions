@@ -19,7 +19,7 @@ on:
         type: string
         default: ''
       image_name:
-        description: 'Docker image name (optional, will use project name if not provided)'
+        description: 'Docker image name (optional, uses project artifactId if not provided)'
         required: false
         type: string
         default: ''
@@ -58,79 +58,61 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_name: ${{ steps.image-info.outputs.image_name }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up JDK ${{ inputs.java_version }}
+      - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: ${{ inputs.java_distribution }}
           java-version: ${{ inputs.java_version }}
           cache: 'maven'
 
-      - name: Test Docker login
-        run: echo "${{ secrets.DOCKER_HUB_TOKEN }}" | docker login -u "${{ secrets.DOCKER_HUB_USER }}" --password-stdin
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USER }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      - name: Prepare Maven command
-        id: maven-cmd
+      - name: Build and push with Jib
         working-directory: ${{ inputs.working_directory }}
         run: |
-          CMD="./mvnw -B clean package"
-          
-          # Add skip tests if requested
-          if [[ "${{ inputs.skip_tests }}" == "true" ]]; then
-            CMD="$CMD -DskipTests"
-          fi
-          
-          # Add profiles if specified
-          if [[ -n "${{ inputs.maven_profiles }}" ]]; then
-            CMD="$CMD -P${{ inputs.maven_profiles }}"
-          fi
-          
-          # Add container image push
-          CMD="$CMD -Dquarkus.container-image.push=true"
-          CMD="$CMD -Dquarkus.container-image.username=${{ secrets.DOCKER_HUB_USER }}"
-          CMD="$CMD -Dquarkus.container-image.password=${{ secrets.DOCKER_HUB_TOKEN }}"
-          CMD="$CMD -Dquarkus.container-image.registry=${{ inputs.registry }}"
-          
-          # Add image name if specified
-          if [[ -n "${{ inputs.image_name }}" ]]; then
-            CMD="$CMD -Dquarkus.container-image.name=${{ inputs.image_name }}"
-          fi
-          
-          # Add additional Maven args
-          if [[ -n "${{ inputs.maven_args }}" ]]; then
-            CMD="$CMD ${{ inputs.maven_args }}"
-          fi
-          
-          echo "MAVEN_CMD=$CMD" >> $GITHUB_OUTPUT
-          echo "Maven command: $CMD"
+          ARGS=("-B" "-ntp" "package")
 
-      - name: Build and push Docker image with Jib
-        working-directory: ${{ inputs.working_directory }}
+          [[ "${SKIP_TESTS}" == "true" ]] && ARGS+=("-DskipTests")
+          [[ -n "${PROFILES}" ]] && ARGS+=("-P${PROFILES}")
+          [[ -n "${IMAGE_NAME}" ]] && ARGS+=("-Dquarkus.container-image.name=${IMAGE_NAME}")
+          [[ -n "${MAVEN_ARGS}" ]] && ARGS+=(${MAVEN_ARGS})
+
+          ARGS+=("-Dquarkus.container-image.build=true")
+          ARGS+=("-Dquarkus.container-image.push=true")
+          ARGS+=("-Dquarkus.container-image.registry=${REGISTRY}")
+          ARGS+=("-Dquarkus.container-image.group=${DOCKER_USER}")
+
+          ./mvnw "${ARGS[@]}"
         env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKER_HUB_USER }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
-        run: ${{ steps.maven-cmd.outputs.MAVEN_CMD }}
+          SKIP_TESTS: ${{ inputs.skip_tests }}
+          PROFILES: ${{ inputs.maven_profiles }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          MAVEN_ARGS: ${{ inputs.maven_args }}
+          REGISTRY: ${{ inputs.registry }}
+          DOCKER_USER: ${{ secrets.DOCKER_HUB_USER }}
 
-      - name: Extract image info
+      - name: Output image info
         id: image-info
         working-directory: ${{ inputs.working_directory }}
         run: |
-          # Try to extract image name from pom.xml or use provided name
-          if [[ -n "${{ inputs.image_name }}" ]]; then
-            IMAGE_NAME="${{ inputs.image_name }}"
+          if [[ -n "${IMAGE_NAME}" ]]; then
+            NAME="${IMAGE_NAME}"
+          elif [[ -f "pom.xml" ]]; then
+            NAME=$(./mvnw help:evaluate -Dexpression=project.artifactId -q -DforceStdout 2>/dev/null || basename "$(pwd)")
           else
-            # Extract from pom.xml if available
-            if [[ -f "pom.xml" ]]; then
-              IMAGE_NAME=$(mvn help:evaluate -Dexpression=project.artifactId -q -DforceStdout)
-            else
-              IMAGE_NAME=$(basename $(pwd))
-            fi
+            NAME=$(basename "$(pwd)")
           fi
-          
-          FULL_IMAGE="${{ inputs.registry }}/${{ secrets.DOCKER_HUB_USER }}/${IMAGE_NAME}:latest"
-          echo "image_name=$FULL_IMAGE" >> $GITHUB_OUTPUT
-          echo "Built image: $FULL_IMAGE"
+          echo "image_name=${REGISTRY}/${DOCKER_USER}/${NAME}:latest" >> $GITHUB_OUTPUT
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          REGISTRY: ${{ inputs.registry }}
+          DOCKER_USER: ${{ secrets.DOCKER_HUB_USER }}

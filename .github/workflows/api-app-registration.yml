@@ -36,10 +36,6 @@ on:
         required: false
         default: false
         type: boolean
-      image_name:
-        description: 'Nome da imagem Docker gerada no build-and-push'
-        required: false
-        type: string
     secrets:
       API_USERNAME:
         required: true
@@ -57,7 +53,6 @@ jobs:
           echo "App URL: ${{ inputs.app_url }}"
           echo "Description: ${{ inputs.app_description }}"
           echo "Dry run: ${{ inputs.dry_run }}"
-          echo "Image: ${{ inputs.image_name }}"
           curl -u "${{ secrets.API_USERNAME }}:${{ secrets.API_PASSWORD }}" \
             -X POST "${{ inputs.api_base_url }}/register" \
             -H "Content-Type: application/json" \
