@@ -1,0 +1,185 @@
+# ==============================================
+# WORKFLOW: update-image-tag.yml - Atualiza image tag e cria PR
+# ==============================================
+
+name: Update Image Tag (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: 'Service/app name (e.g., capela, peah-fe)'
+        required: true
+        type: string
+      image_tag:
+        description: 'New image tag (e.g., sha-abc123, v1.2.3)'
+        required: true
+        type: string
+      values_file:
+        description: 'Path to values file (e.g., deploy/values-prod.yaml)'
+        required: false
+        type: string
+        default: 'deploy/values-prod.yaml'
+      values_path:
+        description: 'YAML path to image.tag (e.g., .applications.capela.image.tag)'
+        required: false
+        type: string
+        default: ''
+      base_branch:
+        description: 'Base branch for PR'
+        required: false
+        type: string
+        default: 'main'
+      auto_merge:
+        description: 'Enable auto-merge on PR'
+        required: false
+        type: boolean
+        default: false
+      pr_labels:
+        description: 'Labels for PR (comma-separated)'
+        required: false
+        type: string
+        default: 'automated,deploy'
+    secrets:
+      GH_PAT:
+        description: 'GitHub PAT for creating PR'
+        required: true
+    outputs:
+      pr_number:
+        description: 'Created PR number'
+        value: ${{ jobs.update-tag.outputs.pr_number }}
+      pr_url:
+        description: 'Created PR URL'
+        value: ${{ jobs.update-tag.outputs.pr_url }}
+
+jobs:
+  update-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.create-pr.outputs.pull-request-number }}
+      pr_url: ${{ steps.create-pr.outputs.pull-request-url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0
+
+      - name: Setup yq
+        uses: mikefarah/yq@v4
+
+      - name: Determine YAML path
+        id: yaml-path
+        env:
+          VALUES_PATH: ${{ inputs.values_path }}
+          VALUES_FILE: ${{ inputs.values_file }}
+          SERVICE: ${{ inputs.service }}
+        run: |
+          if [[ -n "$VALUES_PATH" ]]; then
+            echo "path=$VALUES_PATH" >> $GITHUB_OUTPUT
+          else
+            # Auto-detect path based on values file structure
+            if yq e '.applications' "$VALUES_FILE" > /dev/null 2>&1; then
+              echo "path=.applications.${SERVICE}.image.tag" >> $GITHUB_OUTPUT
+            elif yq e '.apps' "$VALUES_FILE" > /dev/null 2>&1; then
+              echo "path=.apps.${SERVICE}.image.tag" >> $GITHUB_OUTPUT
+            else
+              echo "path=.image.tag" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Get current tag
+        id: current-tag
+        env:
+          VALUES_FILE: ${{ inputs.values_file }}
+          YAML_PATH: ${{ steps.yaml-path.outputs.path }}
+        run: |
+          CURRENT=$(yq e "$YAML_PATH" "$VALUES_FILE" 2>/dev/null || echo "unknown")
+          echo "tag=$CURRENT" >> $GITHUB_OUTPUT
+          echo "Current tag: $CURRENT"
+
+      - name: Update image tag
+        env:
+          VALUES_FILE: ${{ inputs.values_file }}
+          YAML_PATH: ${{ steps.yaml-path.outputs.path }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          CURRENT_TAG: ${{ steps.current-tag.outputs.tag }}
+        run: |
+          echo "Updating $VALUES_FILE"
+          echo "  Path: $YAML_PATH"
+          echo "  From: $CURRENT_TAG"
+          echo "  To:   $IMAGE_TAG"
+
+          yq e -i "${YAML_PATH} = \"${IMAGE_TAG}\"" "$VALUES_FILE"
+
+      - name: Verify update
+        env:
+          VALUES_FILE: ${{ inputs.values_file }}
+          YAML_PATH: ${{ steps.yaml-path.outputs.path }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          NEW_TAG=$(yq e "$YAML_PATH" "$VALUES_FILE")
+          if [[ "$NEW_TAG" != "$IMAGE_TAG" ]]; then
+            echo "Failed to update tag!"
+            exit 1
+          fi
+          echo "Tag updated successfully to: $NEW_TAG"
+
+      - name: Create Pull Request
+        id: create-pr
+        uses: peter-evans/create-pull-request@v6
+        env:
+          SERVICE: ${{ inputs.service }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          CURRENT_TAG: ${{ steps.current-tag.outputs.tag }}
+          VALUES_FILE: ${{ inputs.values_file }}
+        with:
+          token: ${{ secrets.GH_PAT }}
+          commit-message: "chore(${{ inputs.service }}): update image tag to ${{ inputs.image_tag }}"
+          branch: deploy/${{ inputs.service }}-${{ inputs.image_tag }}
+          delete-branch: true
+          base: ${{ inputs.base_branch }}
+          title: "deploy(${{ inputs.service }}): ${{ inputs.image_tag }}"
+          body: |
+            ## Automated Deployment PR
+
+            | Field | Value |
+            |-------|-------|
+            | Service | `${{ inputs.service }}` |
+            | Previous Tag | `${{ steps.current-tag.outputs.tag }}` |
+            | New Tag | `${{ inputs.image_tag }}` |
+            | Values File | `${{ inputs.values_file }}` |
+
+            ### What happens next?
+            1. Review the changes
+            2. Merge this PR
+            3. ArgoCD will automatically sync and deploy
+
+            ---
+            *This PR was automatically created by CI after a successful build.*
+          labels: ${{ inputs.pr_labels }}
+
+      - name: Enable auto-merge
+        if: inputs.auto_merge && steps.create-pr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PR_NUMBER: ${{ steps.create-pr.outputs.pull-request-number }}
+        run: |
+          gh pr merge "$PR_NUMBER" --auto --squash
+
+      - name: Summary
+        env:
+          PR_NUMBER: ${{ steps.create-pr.outputs.pull-request-number }}
+          PR_URL: ${{ steps.create-pr.outputs.pull-request-url }}
+          SERVICE: ${{ inputs.service }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          echo "## Deployment PR Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| PR | #${PR_NUMBER} |" >> $GITHUB_STEP_SUMMARY
+          echo "| URL | ${PR_URL} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | ${SERVICE} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | ${IMAGE_TAG} |" >> $GITHUB_STEP_SUMMARY
