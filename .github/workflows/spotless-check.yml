@@ -48,6 +48,16 @@ on:
         required: false
         default: 'spotless:check'
         type: string
+      cache_key:
+        description: 'Cache key for restoring parent modules'
+        required: false
+        type: string
+        default: ''
+      cache_path:
+        description: 'Cache path for parent modules'
+        required: false
+        type: string
+        default: '~/.m2/repository/com/lolmeida'
     outputs:
       spotless_status:
         description: 'Spotless check status'
@@ -78,6 +88,13 @@ jobs:
           distribution: ${{ inputs.java_distribution }}
           java-version: ${{ inputs.java_version }}
           cache: 'maven'
+
+      - name: Restore parent modules
+        if: inputs.cache_key != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ inputs.cache_path }}
+          key: ${{ inputs.cache_key }}
 
       - name: Prepare Maven command
         id: maven-cmd

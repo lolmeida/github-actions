@@ -1,0 +1,85 @@
+name: Monorepo Detect Changes (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      services:
+        description: 'JSON array of service names to check (e.g., ["capela","content-delivery"])'
+        required: true
+        type: string
+      manual_service:
+        description: 'Service selected in workflow_dispatch (optional)'
+        required: false
+        type: string
+        default: ''
+      manual_all_value:
+        description: 'Value that means "all services" in workflow_dispatch'
+        required: false
+        type: string
+        default: 'all'
+    outputs:
+      services:
+        description: 'JSON array of changed services'
+        value: ${{ jobs.detect.outputs.services }}
+      has_changes:
+        description: 'Whether any services changed'
+        value: ${{ jobs.detect.outputs.has_changes }}
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.set-matrix.outputs.services }}
+      has_changes: ${{ steps.set-matrix.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build path filters
+        id: build-filters
+        run: |
+          FILTERS=""
+          for SERVICE in $(echo "$SERVICES_INPUT" | jq -r '.[]'); do
+            FILTERS="${FILTERS}${SERVICE}:\n  - '${SERVICE}/**'\n"
+          done
+          echo "filters<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$FILTERS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        env:
+          SERVICES_INPUT: ${{ inputs.services }}
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: inputs.manual_service == ''
+        with:
+          filters: ${{ steps.build-filters.outputs.filters }}
+
+      - name: Set service matrix
+        id: set-matrix
+        run: |
+          if [[ -n "$MANUAL_SERVICE" ]]; then
+            if [[ "$MANUAL_SERVICE" == "$MANUAL_ALL" ]]; then
+              echo "services=${SERVICES_INPUT}" >> $GITHUB_OUTPUT
+            else
+              echo "services=[\"${MANUAL_SERVICE}\"]" >> $GITHUB_OUTPUT
+            fi
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            CHANGED="[]"
+            for SERVICE in $(echo "$SERVICES_INPUT" | jq -r '.[]'); do
+              FILTER_OUTPUT=$(echo "${FILTER_OUTPUTS}" | jq -r ".\"${SERVICE}\"")
+              if [[ "$FILTER_OUTPUT" == "true" ]]; then
+                CHANGED=$(echo "$CHANGED" | jq -c ". + [\"${SERVICE}\"]")
+              fi
+            done
+            echo "services=${CHANGED}" >> $GITHUB_OUTPUT
+            if [[ "$CHANGED" == "[]" ]]; then
+              echo "has_changes=false" >> $GITHUB_OUTPUT
+            else
+              echo "has_changes=true" >> $GITHUB_OUTPUT
+            fi
+          fi
+        env:
+          SERVICES_INPUT: ${{ inputs.services }}
+          MANUAL_SERVICE: ${{ inputs.manual_service }}
+          MANUAL_ALL: ${{ inputs.manual_all_value }}
+          FILTER_OUTPUTS: ${{ toJson(steps.filter.outputs) }}

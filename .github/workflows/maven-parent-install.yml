@@ -1,0 +1,77 @@
+name: Maven Parent Install (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      java_version:
+        description: 'Java version'
+        required: false
+        type: string
+        default: '21'
+      java_distribution:
+        description: 'Java distribution'
+        required: false
+        type: string
+        default: 'temurin'
+      parent_modules:
+        description: 'Comma-separated list of parent modules to install (e.g., "quarkus-bom,quarkus-parent")'
+        required: true
+        type: string
+      cache_key_prefix:
+        description: 'Cache key prefix'
+        required: false
+        type: string
+        default: 'parent-modules'
+      cache_path:
+        description: 'Path to cache (Maven local repo subset)'
+        required: false
+        type: string
+        default: '~/.m2/repository/com/lolmeida'
+      install_root:
+        description: 'Install root pom (-N flag)'
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      cache_key:
+        description: 'The cache key used'
+        value: ${{ jobs.install.outputs.cache_key }}
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    outputs:
+      cache_key: ${{ steps.cache-key.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java_version }}
+          distribution: ${{ inputs.java_distribution }}
+          cache: maven
+
+      - name: Generate cache key
+        id: cache-key
+        run: |
+          echo "key=${CACHE_PREFIX}-${GITHUB_SHA}" >> $GITHUB_OUTPUT
+        env:
+          CACHE_PREFIX: ${{ inputs.cache_key_prefix }}
+
+      - name: Install root pom
+        if: inputs.install_root
+        run: ./mvnw -B -ntp install -N
+
+      - name: Install parent modules
+        run: |
+          MODULES=$(echo "${PARENT_MODULES}" | tr ',' ' ' | sed 's/ /,/g')
+          ./mvnw -B -ntp install -pl "${MODULES}" -DskipTests
+        env:
+          PARENT_MODULES: ${{ inputs.parent_modules }}
+
+      - name: Cache parent modules
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ inputs.cache_path }}
+          key: ${{ steps.cache-key.outputs.key }}

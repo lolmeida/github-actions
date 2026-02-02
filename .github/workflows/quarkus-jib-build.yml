@@ -1,0 +1,114 @@
+name: Quarkus Jib Build (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: 'Service/module name to build'
+        required: true
+        type: string
+      java_version:
+        description: 'Java version'
+        required: false
+        type: string
+        default: '21'
+      java_distribution:
+        description: 'Java distribution'
+        required: false
+        type: string
+        default: 'temurin'
+      maven_profile:
+        description: 'Maven profile to activate'
+        required: false
+        type: string
+        default: 'prod'
+      registry:
+        description: 'Docker registry'
+        required: false
+        type: string
+        default: 'docker.io'
+      image_tag:
+        description: 'Docker image tag'
+        required: true
+        type: string
+      additional_tags:
+        description: 'Additional tags (comma-separated)'
+        required: false
+        type: string
+        default: 'latest'
+      cache_key:
+        description: 'Cache key for restoring parent modules'
+        required: false
+        type: string
+        default: ''
+      cache_path:
+        description: 'Cache path for parent modules'
+        required: false
+        type: string
+        default: '~/.m2/repository/com/lolmeida'
+    secrets:
+      DOCKER_HUB_USER:
+        required: true
+      DOCKER_HUB_TOKEN:
+        required: true
+    outputs:
+      image:
+        description: 'Full image name with tag'
+        value: ${{ jobs.build.outputs.image }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.build-info.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java_version }}
+          distribution: ${{ inputs.java_distribution }}
+          cache: maven
+
+      - name: Restore parent modules
+        if: inputs.cache_key != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ inputs.cache_path }}
+          key: ${{ inputs.cache_key }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USER }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Build and push with Jib
+        working-directory: ${{ inputs.service }}
+        run: |
+          ../mvnw -B -ntp package -P"${MAVEN_PROFILE}" \
+            -Dquarkus.container-image.build=true \
+            -Dquarkus.container-image.push=true \
+            -Dquarkus.container-image.registry="${REGISTRY}" \
+            -Dquarkus.container-image.group="${DOCKER_USER}" \
+            -Dquarkus.container-image.name="${SERVICE}" \
+            -Dquarkus.container-image.tag="${IMAGE_TAG}" \
+            -Dquarkus.container-image.additional-tags="${ADDITIONAL_TAGS}"
+        env:
+          SERVICE: ${{ inputs.service }}
+          MAVEN_PROFILE: ${{ inputs.maven_profile }}
+          REGISTRY: ${{ inputs.registry }}
+          DOCKER_USER: ${{ secrets.DOCKER_HUB_USER }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          ADDITIONAL_TAGS: ${{ inputs.additional_tags }}
+
+      - name: Output image info
+        id: build-info
+        run: |
+          echo "image=${REGISTRY}/${DOCKER_USER}/${SERVICE}:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        env:
+          REGISTRY: ${{ inputs.registry }}
+          DOCKER_USER: ${{ secrets.DOCKER_HUB_USER }}
+          SERVICE: ${{ inputs.service }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
