@@ -1,15 +1,34 @@
 # ==============================================
-# WORKFLOW 1: test-api.yml - APENAS TESTA API
+# WORKFLOW: test-api.yml - Testa API e Keycloak
 # ==============================================
 
 name: Test API Connection and Credentials (Reusable)
 
 on:
   workflow_call:
+    inputs:
+      api_base_url:
+        description: 'Base URL for the API (e.g., https://k8s-be.lolmeida.com)'
+        required: false
+        type: string
+        default: 'https://k8s-be.lolmeida.com'
+      keycloak_url:
+        description: 'Keycloak base URL (e.g., https://keycloak.lolmeida.com)'
+        required: false
+        type: string
+        default: 'https://keycloak.lolmeida.com'
+      realm:
+        description: 'Keycloak realm'
+        required: false
+        type: string
+        default: 'peah'
+      client_id:
+        description: 'Keycloak client ID'
+        required: false
+        type: string
+        default: 'kubernetes-backend'
     secrets:
-      API_USERNAME:
-        required: true
-      API_PASSWORD:
+      KEYCLOAK_CLIENT_SECRET:
         required: true
     outputs:
       api_ready:
@@ -25,124 +44,120 @@ jobs:
     steps:
       - name: Test API connectivity
         id: connectivity
+        env:
+          API_BASE_URL: ${{ inputs.api_base_url }}
         run: |
-          echo "Testing API base URL..."
-          if curl -f -s --max-time 10 "https://k8s-be.lolmeida.com/q/health" >/dev/null; then
-            echo "✅ Base URL is reachable"
+          echo "Testing API base URL: ${API_BASE_URL}"
+          if curl -f -s --max-time 10 "${API_BASE_URL}/q/health" >/dev/null; then
+            echo "Base URL is reachable"
             echo "base_url_ok=true" >> $GITHUB_OUTPUT
           else
-            echo "❌ Base URL is not reachable"
+            echo "Base URL is not reachable"
             echo "base_url_ok=false" >> $GITHUB_OUTPUT
           fi
-          
-          echo "Testing auth endpoint..."
-          AUTH_RESPONSE=$(curl -s -X POST \
-            "https://k8s-be.lolmeida.com/auth/login" \
-            -H 'Content-Type: application/json' \
-            -d '{"username":"test","password":"test1234"}' \
-            -w "HTTP_STATUS:%{http_code}")
-          
-          if echo "$AUTH_RESPONSE" | grep -q "HTTP_STATUS:40[13]"; then
-            echo "✅ Auth endpoint working"
-            echo "auth_endpoint_ok=true" >> $GITHUB_OUTPUT
-          else
-            echo "❌ Auth endpoint not working"
-            echo "auth_endpoint_ok=false" >> $GITHUB_OUTPUT
-          fi
-          
+
           echo "Testing apps endpoint..."
           APPS_RESPONSE=$(curl -s -X GET \
-            "https://k8s-be.lolmeida.com/api/apps" \
+            "${API_BASE_URL}/api/apps" \
             -w "HTTP_STATUS:%{http_code}")
-          
+
           if echo "$APPS_RESPONSE" | grep -q "HTTP_STATUS:[0-9]"; then
-            echo "✅ Apps endpoint responding"
+            echo "Apps endpoint responding"
             echo "apps_endpoint_ok=true" >> $GITHUB_OUTPUT
           else
-            echo "❌ Apps endpoint not responding"
+            echo "Apps endpoint not responding"
             echo "apps_endpoint_ok=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Test secrets
+      - name: Test Keycloak connectivity
+        id: keycloak-check
+        env:
+          KEYCLOAK_URL: ${{ inputs.keycloak_url }}
+          REALM: ${{ inputs.realm }}
+        run: |
+          echo "Testing Keycloak at ${KEYCLOAK_URL}"
+
+          WELL_KNOWN="${KEYCLOAK_URL}/realms/${REALM}/.well-known/openid-configuration"
+          if curl -f -s --max-time 10 "$WELL_KNOWN" >/dev/null; then
+            echo "Keycloak is reachable"
+            echo "keycloak_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "Keycloak is not reachable"
+            echo "keycloak_ok=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Test secret configuration
         id: secrets
+        env:
+          CLIENT_SECRET: ${{ secrets.KEYCLOAK_CLIENT_SECRET }}
         run: |
           echo "Testing secrets configuration..."
-          
-          SECRETS_OK=true
-          
-          if [[ -z "${{ secrets.API_USERNAME }}" ]]; then
-            echo "❌ API_USERNAME secret not configured"
-            SECRETS_OK=false
-          else
-            echo "✅ API_USERNAME configured"
-          fi
-          
-          if [[ -z "${{ secrets.API_PASSWORD }}" ]]; then
-            echo "❌ API_PASSWORD secret not configured"
-            SECRETS_OK=false
-          else
-            echo "✅ API_PASSWORD configured"
-          fi
-          
-          echo "secrets_ok=$SECRETS_OK" >> $GITHUB_OUTPUT
 
-      - name: Test authentication
-        id: auth-test
-        run: |
-          echo "Testing real authentication..."
-          
-          if [[ "${{ steps.secrets.outputs.secrets_ok }}" != "true" ]]; then
-            echo "⚠️ Skipping auth test - secrets not available"
-            echo "auth_test_ok=false" >> $GITHUB_OUTPUT
-            exit 0
+          if [[ -z "${CLIENT_SECRET}" ]]; then
+            echo "KEYCLOAK_CLIENT_SECRET not configured"
+            echo "secrets_ok=false" >> $GITHUB_OUTPUT
+          else
+            echo "KEYCLOAK_CLIENT_SECRET configured"
+            echo "secrets_ok=true" >> $GITHUB_OUTPUT
           fi
-          
-          USERNAME="${{ secrets.API_USERNAME }}"
-          PASSWORD="${{ secrets.API_PASSWORD }}"
-          
-          AUTH_PAYLOAD=$(jq -n \
-            --arg username "$USERNAME" \
-            --arg password "$PASSWORD" \
-            '{username: $username, password: $password}')
-          
-          AUTH_RESPONSE=$(curl -s -X POST \
-            "https://auth-be.lolmeida.com/auth/login" \
-            -H 'Content-Type: application/json' \
-            -d "$AUTH_PAYLOAD" \
+
+      - name: Test Keycloak authentication
+        id: auth-test
+        if: steps.secrets.outputs.secrets_ok == 'true' && steps.keycloak-check.outputs.keycloak_ok == 'true'
+        env:
+          KEYCLOAK_URL: ${{ inputs.keycloak_url }}
+          REALM: ${{ inputs.realm }}
+          CLIENT_ID: ${{ inputs.client_id }}
+          CLIENT_SECRET: ${{ secrets.KEYCLOAK_CLIENT_SECRET }}
+        run: |
+          TOKEN_URL="${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token"
+          echo "Testing authentication against ${TOKEN_URL}..."
+
+          TOKEN_RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials" \
+            -d "client_id=${CLIENT_ID}" \
+            -d "client_secret=${CLIENT_SECRET}" \
             --max-time 30 \
             -w "HTTP_STATUS:%{http_code}")
-          
-          HTTP_STATUS=$(echo "$AUTH_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+
+          HTTP_STATUS=$(echo "$TOKEN_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
           echo "Received HTTP status: $HTTP_STATUS"
-          
+
           if [[ "$HTTP_STATUS" == "200" ]]; then
-            echo "✅ Authentication successful"
+            echo "Authentication successful"
             echo "auth_test_ok=true" >> $GITHUB_OUTPUT
           else
-            echo "❌ Authentication failed"
+            echo "Authentication failed"
             echo "auth_test_ok=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Final check
         id: final-check
+        env:
+          BASE_URL_OK: ${{ steps.connectivity.outputs.base_url_ok }}
+          APPS_ENDPOINT_OK: ${{ steps.connectivity.outputs.apps_endpoint_ok }}
+          KEYCLOAK_OK: ${{ steps.keycloak-check.outputs.keycloak_ok }}
+          SECRETS_OK: ${{ steps.secrets.outputs.secrets_ok }}
+          AUTH_TEST_OK: ${{ steps.auth-test.outputs.auth_test_ok || 'false' }}
         run: |
           echo "API Test Summary:"
           echo "================"
-          echo "Base URL: ${{ steps.connectivity.outputs.base_url_ok }}"
-          echo "Auth Endpoint: ${{ steps.connectivity.outputs.auth_endpoint_ok }}"
-          echo "Apps Endpoint: ${{ steps.connectivity.outputs.apps_endpoint_ok }}"
-          echo "Secrets: ${{ steps.secrets.outputs.secrets_ok }}"
-          echo "Authentication: ${{ steps.auth-test.outputs.auth_test_ok }}"
-          
-          if [[ "${{ steps.connectivity.outputs.base_url_ok }}" == "true" && \
-                "${{ steps.connectivity.outputs.auth_endpoint_ok }}" == "true" && \
-                "${{ steps.secrets.outputs.secrets_ok }}" == "true" && \
-                "${{ steps.auth-test.outputs.auth_test_ok }}" == "true" ]]; then
+          echo "Base URL: ${BASE_URL_OK}"
+          echo "Apps Endpoint: ${APPS_ENDPOINT_OK}"
+          echo "Keycloak: ${KEYCLOAK_OK}"
+          echo "Secrets: ${SECRETS_OK}"
+          echo "Authentication: ${AUTH_TEST_OK}"
+
+          if [[ "${BASE_URL_OK}" == "true" && \
+                "${KEYCLOAK_OK}" == "true" && \
+                "${SECRETS_OK}" == "true" && \
+                "${AUTH_TEST_OK}" == "true" ]]; then
             echo ""
-            echo "🎉 ALL TESTS PASSED - API is ready!"
+            echo "ALL TESTS PASSED - API is ready!"
             echo "api_ready=true" >> $GITHUB_OUTPUT
           else
             echo ""
-            echo "❌ Some tests failed - API not ready"
+            echo "Some tests failed - API not ready"
             echo "api_ready=false" >> $GITHUB_OUTPUT
           fi

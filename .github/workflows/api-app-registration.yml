@@ -1,3 +1,9 @@
+# ==============================================
+# WORKFLOW: api-app-registration.yml - Registo de Apps (Simples)
+# ==============================================
+
+name: App Registration (Simple)
+
 on:
   workflow_call:
     inputs:
@@ -36,31 +42,86 @@ on:
         required: false
         default: false
         type: boolean
+      keycloak_url:
+        description: 'Keycloak base URL'
+        required: false
+        type: string
+        default: 'https://keycloak.lolmeida.com'
+      realm:
+        description: 'Keycloak realm'
+        required: false
+        type: string
+        default: 'peah'
+      client_id:
+        description: 'Keycloak client ID'
+        required: false
+        type: string
+        default: 'kubernetes-backend'
     secrets:
-      API_USERNAME:
-        required: true
-      API_PASSWORD:
+      KEYCLOAK_CLIENT_SECRET:
         required: true
 
 jobs:
   register:
     runs-on: ubuntu-latest
     steps:
-      - name: Register app via API
+      - name: Authenticate with Keycloak
+        id: auth
+        env:
+          KEYCLOAK_URL: ${{ inputs.keycloak_url }}
+          REALM: ${{ inputs.realm }}
+          CLIENT_ID: ${{ inputs.client_id }}
+          CLIENT_SECRET: ${{ secrets.KEYCLOAK_CLIENT_SECRET }}
         run: |
-          echo "App: ${{ inputs.app_name }}"
-          echo "Base URL: ${{ inputs.api_base_url }}"
-          echo "App URL: ${{ inputs.app_url }}"
-          echo "Description: ${{ inputs.app_description }}"
-          echo "Dry run: ${{ inputs.dry_run }}"
-          curl -u "${{ secrets.API_USERNAME }}:${{ secrets.API_PASSWORD }}" \
-            -X POST "${{ inputs.api_base_url }}/register" \
+          TOKEN_URL="${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token"
+
+          TOKEN_RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials" \
+            -d "client_id=${CLIENT_ID}" \
+            -d "client_secret=${CLIENT_SECRET}" \
+            --max-time 30)
+
+          TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+
+          if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
+            echo "Authentication failed"
+            exit 1
+          fi
+
+          echo "Authentication successful"
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Register app via API
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+          API_BASE_URL: ${{ inputs.api_base_url }}
+          APP_URL: ${{ inputs.app_url }}
+          APP_DESCRIPTION: ${{ inputs.app_description }}
+          APP_ICON: ${{ inputs.app_icon }}
+          IS_ENABLED: ${{ inputs.is_enabled }}
+          IS_ACTIVE: ${{ inputs.is_active }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          echo "App: $APP_NAME"
+          echo "Base URL: $API_BASE_URL"
+          echo "App URL: $APP_URL"
+          echo "Dry run: $DRY_RUN"
+
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "Dry run - skipping registration"
+            exit 0
+          fi
+
+          curl -X POST "${API_BASE_URL}/register" \
+            -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json" \
             -d "{
-              \"name\": \"${{ inputs.app_name }}\",
-              \"url\": \"${{ inputs.app_url }}\",
-              \"description\": \"${{ inputs.app_description }}\",
-              \"icon\": \"${{ inputs.app_icon }}\",
-              \"is_enabled\": \"${{ inputs.is_enabled }}\",
-              \"is_active\": \"${{ inputs.is_active }}\"
+              \"name\": \"${APP_NAME}\",
+              \"url\": \"${APP_URL}\",
+              \"description\": \"${APP_DESCRIPTION}\",
+              \"icon\": \"${APP_ICON}\",
+              \"is_enabled\": ${IS_ENABLED},
+              \"is_active\": ${IS_ACTIVE}
             }"

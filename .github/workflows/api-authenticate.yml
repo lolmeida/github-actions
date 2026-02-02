@@ -1,0 +1,113 @@
+# ==============================================
+# WORKFLOW: api-authenticate.yml - Keycloak Auth
+# ==============================================
+
+name: Keycloak Authenticate (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      keycloak_url:
+        description: 'Keycloak base URL (e.g., https://keycloak.lolmeida.com)'
+        required: false
+        type: string
+        default: 'https://keycloak.lolmeida.com'
+      realm:
+        description: 'Keycloak realm'
+        required: false
+        type: string
+        default: 'peah'
+      client_id:
+        description: 'Keycloak client ID'
+        required: false
+        type: string
+        default: 'kubernetes-backend'
+    secrets:
+      KEYCLOAK_CLIENT_SECRET:
+        required: true
+    outputs:
+      token:
+        description: 'Authentication token'
+        value: ${{ jobs.authenticate.outputs.token }}
+
+jobs:
+  authenticate:
+    runs-on: ubuntu-latest
+    outputs:
+      token: ${{ steps.auth.outputs.token }}
+    steps:
+      - name: Authenticate with Keycloak
+        id: auth
+        shell: bash
+        env:
+          KEYCLOAK_URL: ${{ inputs.keycloak_url }}
+          REALM: ${{ inputs.realm }}
+          CLIENT_ID: ${{ inputs.client_id }}
+          CLIENT_SECRET: ${{ secrets.KEYCLOAK_CLIENT_SECRET }}
+        run: |
+          TOKEN_URL="${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token"
+          echo "Authenticating against $TOKEN_URL"
+
+          if [[ -z "$CLIENT_SECRET" ]]; then
+            echo "KEYCLOAK_CLIENT_SECRET is empty!"
+            exit 1
+          fi
+
+          echo "Client ID: $CLIENT_ID"
+
+          TOKEN_RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials" \
+            -d "client_id=${CLIENT_ID}" \
+            -d "client_secret=${CLIENT_SECRET}" \
+            --max-time 30 \
+            -w "HTTP_STATUS:%{http_code}")
+
+          HTTP_STATUS=$(echo "$TOKEN_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | tail -1 | cut -d: -f2)
+          RESPONSE_BODY=$(echo "$TOKEN_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+
+          echo "HTTP Status: $HTTP_STATUS"
+
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "Authentication failed (HTTP $HTTP_STATUS)"
+            echo "Response: $RESPONSE_BODY"
+            case "$HTTP_STATUS" in
+              401) echo "Invalid client credentials" ;;
+              400) echo "Bad request - check client_id and grant_type" ;;
+              *) echo "Unexpected error" ;;
+            esac
+            exit 1
+          fi
+
+          if ! echo "$RESPONSE_BODY" | jq . >/dev/null 2>&1; then
+            echo "Response is not valid JSON"
+            exit 1
+          fi
+
+          TOKEN=$(echo "$RESPONSE_BODY" | jq -r '.access_token')
+
+          if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
+            echo "No access_token found in response"
+            exit 1
+          fi
+
+          EXPIRES_IN=$(echo "$RESPONSE_BODY" | jq -r '.expires_in')
+          echo "Authentication successful (token expires in ${EXPIRES_IN}s)"
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Validate Token Format
+        shell: bash
+        env:
+          TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          if [[ -z "$TOKEN" ]]; then
+            echo "Token is empty!"
+            exit 1
+          fi
+
+          if [[ "$TOKEN" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]; then
+            echo "Token is valid JWT format"
+          else
+            echo "Token is not JWT format"
+            exit 1
+          fi
