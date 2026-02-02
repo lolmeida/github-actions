@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       chart_repo:
-        description: 'Git repo URL containing the Helm chart'
+        description: 'Git repo URL containing the Helm chart (without auth)'
         required: true
         type: string
       chart_path:
@@ -23,6 +23,21 @@ on:
         description: 'Values file path in caller repo'
         required: true
         type: string
+      helm_set:
+        description: 'Comma-separated --set values (e.g., "image.tag=abc,replicas=2")'
+        required: false
+        type: string
+        default: ''
+      timeout:
+        description: 'Helm timeout (e.g., 5m, 10m)'
+        required: false
+        type: string
+        default: '5m'
+      wait:
+        description: 'Wait for resources to be ready'
+        required: false
+        type: boolean
+        default: true
       create_namespace:
         description: 'Create namespace if missing'
         required: false
@@ -33,16 +48,22 @@ on:
         required: false
       KUBE_CONFIG_B64:
         required: false
+      GH_PAT:
+        description: 'GitHub PAT for private chart repos'
+        required: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout caller repo
         uses: actions/checkout@v4
 
       - name: Setup Helm
         uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v4
@@ -50,14 +71,14 @@ jobs:
       - name: Validate kubeconfig secrets
         run: |
           if [[ -z "${KUBE_CONFIG}" && -z "${KUBE_CONFIG_B64}" ]]; then
-            echo "Missing kubeconfig: set KUBE_CONFIG or KUBE_CONFIG_B64 secret" >&2
+            echo "::error::Missing kubeconfig: set KUBE_CONFIG or KUBE_CONFIG_B64 secret"
             exit 1
           fi
         env:
           KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
           KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
 
-      - name: Configure kubeconfig (raw or base64)
+      - name: Configure kubeconfig
         run: |
           mkdir -p "$HOME/.kube"
           if [[ -n "${KUBE_CONFIG_B64}" ]]; then
@@ -71,12 +92,49 @@ jobs:
           KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
 
       - name: Clone Helm charts
-        run: git clone "${{ inputs.chart_repo }}" charts-repo
+        run: |
+          CHART_REPO="${INPUT_CHART_REPO}"
+          if [[ -n "${GH_PAT}" && "$CHART_REPO" == *"github.com"* ]]; then
+            CHART_REPO=$(echo "$CHART_REPO" | sed "s|https://|https://x-access-token:${GH_PAT}@|")
+          fi
+          git clone "$CHART_REPO" charts-repo
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          INPUT_CHART_REPO: ${{ inputs.chart_repo }}
+
+      - name: Create namespace if needed
+        if: inputs.create_namespace
+        run: |
+          kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+        env:
+          NAMESPACE: ${{ inputs.namespace }}
 
       - name: Deploy with Helm
         run: |
-          ARGS=("upgrade" "--install" "${{ inputs.release_name }}" "${{ inputs.chart_path }}" "-n" "${{ inputs.namespace }}" "-f" "${{ inputs.values_file }}")
-          if [[ "${{ inputs.create_namespace }}" == "true" ]]; then
-            ARGS+=("--create-namespace")
+          ARGS=("upgrade" "--install" "${RELEASE_NAME}")
+          ARGS+=("charts-repo/${CHART_PATH}")
+          ARGS+=("--namespace" "${NAMESPACE}")
+          ARGS+=("--values" "${VALUES_FILE}")
+          ARGS+=("--timeout" "${TIMEOUT}")
+
+          if [[ "${WAIT}" == "true" ]]; then
+            ARGS+=("--wait")
           fi
+
+          if [[ -n "${HELM_SET}" ]]; then
+            IFS=',' read -ra SETS <<< "${HELM_SET}"
+            for SET in "${SETS[@]}"; do
+              ARGS+=("--set" "$SET")
+            done
+          fi
+
+          echo "Running: helm ${ARGS[*]}"
           helm "${ARGS[@]}"
+        env:
+          RELEASE_NAME: ${{ inputs.release_name }}
+          CHART_PATH: ${{ inputs.chart_path }}
+          NAMESPACE: ${{ inputs.namespace }}
+          VALUES_FILE: ${{ inputs.values_file }}
+          TIMEOUT: ${{ inputs.timeout }}
+          WAIT: ${{ inputs.wait }}
+          HELM_SET: ${{ inputs.helm_set }}

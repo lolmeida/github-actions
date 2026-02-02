@@ -410,3 +410,32 @@ jobs:
     secrets:
       KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
 ```
+
+### Helm Deploy (Reusable)
+
+Workflow reutilizavel para deploy via Helm usando um chart num repo Git e um values no repo chamador.
+
+**Exemplo de uso (caller repo):**
+```yaml
+jobs:
+  deploy:
+    uses: lolmeida/github-actions/.github/workflows/helm-deploy.yml@main
+    with:
+      release_name: capela-prod
+      namespace: prod-lolmeida
+      chart_repo: https://github.com/lolmeida/k8s-helm-charts-template
+      chart_path: charts-repo/charts/common-app
+      values_file: deploy/values-prod.yaml
+      create_namespace: true
+    secrets:
+      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+      # ou use base64:
+      KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
+```
+
+**Secrets:**
+- `KUBE_CONFIG` (kubeconfig raw) **ou** `KUBE_CONFIG_B64` (kubeconfig em base64)
+
+**Notas:**
+- Se `KUBE_CONFIG_B64` estiver presente, ele tem prioridade.
+- O job falha se nenhum dos dois secrets estiver definido.
